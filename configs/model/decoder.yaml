@@ -1,0 +1,30 @@
+# 3D Decoder Configuration
+# Decodes slots to 3D pointmaps
+
+decoder_type: "spatial_broadcast"  # or "transformer"
+
+# Input dimensions
+slot_dim: 128
+pose_dim: 12  # Flattened 3x4 camera pose matrix
+
+# Spatial broadcast decoder
+spatial_broadcast:
+  resolution: [64, 64]  # H x W
+  hidden_dims: [256, 256, 128]
+  output_dim: 3  # X, Y, Z coordinates
+  
+# Pose embedding
+pose_embedding:
+  enabled: true
+  embed_dim: 64
+  
+# Per-slot decoding
+per_slot:
+  enabled: true
+  aggregation: "weighted_sum"  # How to combine slot outputs
+  
+# Output format
+output:
+  type: "pointmap"  # Dense 3D pointmap
+  coordinate_system: "world"
+  scale_factor: 1.0

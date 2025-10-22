@@ -1,0 +1,85 @@
+# POST3R Training Configuration
+# Base configuration for training POST3R model
+
+experiment_name: "post3r_base"
+experiment_group: "default"
+
+checkpoint_every_n_steps: 5000
+
+# Model configuration
+model:
+  # TTT3R backbone
+  ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
+  
+  # Slot attention
+  num_slots: 8
+  slot_dim: 128
+  num_iterations: 3
+  
+  # Decoder
+  decoder_resolution: [64, 64]
+  
+  # Loss weights
+  recon_l1_weight: 1.0
+  recon_l2_weight: 1.0
+  temporal_weight: 0.1
+  entropy_weight: 0.01
+  diversity_weight: 0.01
+  
+  # Optimizer
+  learning_rate: 1e-4
+  optimizer_type: "adamw"
+  weight_decay: 0.0001
+  
+  # Scheduler
+  scheduler_type: "warmup_cosine"
+  warmup_steps: 10000
+  
+  # Logging
+  log_every_n_steps: 100
+  visualize: true
+  visualize_every_n_steps: 1000
+
+# Data configuration
+data:
+  data_root: "data/videos"  # Update this path
+  dataset_type: "video"  # or "frames"
+  
+  sequence_length: 16
+  frame_skip: 1
+  
+  batch_size: 4
+  num_workers: 4
+  pin_memory: true
+  
+  # Transforms
+  resize_size: [256, 256]
+  crop_size: [224, 224]
+  normalize: true
+  augment_train: true
+  
+  # Dataset specific
+  video_ext: ".mp4"
+  image_ext: ".png"
+
+# Trainer configuration
+trainer:
+  max_steps: 100000
+  val_check_interval: 5000
+  log_every_n_steps: 100
+  
+  # Device
+  accelerator: "auto"  # "gpu", "cpu", or "auto"
+  devices: 1  # Number of GPUs or "auto"
+  
+  # Precision
+  precision: "32"  # "16-mixed", "32", or "bf16-mixed"
+  
+  # Gradient
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  
+  # Debugging
+  fast_dev_run: false
+  limit_train_batches: null  # Use float for fraction or int for number of batches
+  limit_val_batches: null

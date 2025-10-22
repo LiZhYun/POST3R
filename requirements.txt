@@ -1,0 +1,64 @@
+# NOTE: For conda installation, use environment.yml instead
+# This file is for pip-only installation (not recommended)
+
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy==1.26.4
+einops>=0.6.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+
+# Training & optimization
+pytorch-lightning>=2.0.0
+tensorboard>=2.13.0
+wandb>=0.15.0
+accelerate>=0.20.0
+transformers
+
+# TTT3R/DUSt3R dependencies
+roma
+huggingface-hub[torch]>=0.22
+trimesh
+h5py
+
+# Visualization
+matplotlib>=3.7.0
+opencv-python>=4.8.0
+pillow==10.3.0
+viser>=0.1.0
+gradio
+pyglet<2
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+
+# Metrics & evaluation
+torchmetrics>=1.0.0
+lpips>=0.1.4
+evo
+open3d
+
+# Video & image processing
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.8
+av>=10.0.0
+moviepy>=1.0.3
+
+# Data loading
+webdataset>=0.2.35
+timm>=0.9.7
+
+# Optional utilities
+requests>=2.31.0
+pycocotools>=2.0.6
+
+# Development
+pytest>=7.4.0
+black>=23.7.0
+isort>=5.12.0
+ruff>=0.0.292
+pre-commit>=2.20.0

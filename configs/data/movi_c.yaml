@@ -1,0 +1,34 @@
+# MOVi-C Dataset Configuration
+
+dataset_name: "movi_c"
+data_root: "data/movi_c"
+
+# Video settings
+video:
+  height: 256
+  width: 256
+  fps: 12
+  sequence_length: 24
+  
+# Data splits
+splits:
+  train: "train"
+  val: "validation"
+  test: "test"
+  
+# Data loading
+loading:
+  format: "webdataset"  # or "frames"
+  cache: false
+  
+# Augmentation (training only)
+augmentation:
+  enabled: true
+  random_crop: false
+  color_jitter: true
+  horizontal_flip: false  # Keep consistent for 3D
+  
+# Normalization
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]

@@ -1,0 +1,73 @@
+# POST3R Debug Configuration
+# Fast configuration for debugging and testing
+
+experiment_name: "post3r_debug"
+experiment_group: "debug"
+
+checkpoint_every_n_steps: 100
+
+# Model configuration
+model:
+  ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
+  
+  num_slots: 4  # Fewer slots for faster iteration
+  slot_dim: 64  # Smaller dimension
+  num_iterations: 2  # Fewer iterations
+  
+  decoder_resolution: [32, 32]  # Lower resolution
+  
+  recon_l1_weight: 1.0
+  recon_l2_weight: 1.0
+  temporal_weight: 0.1
+  entropy_weight: 0.01
+  diversity_weight: 0.01
+  
+  learning_rate: 1e-3  # Higher LR for faster debugging
+  optimizer_type: "adam"
+  weight_decay: 0.0
+  
+  scheduler_type: null  # No scheduler for debugging
+  
+  log_every_n_steps: 10
+  visualize: false  # Disable viz for speed
+  visualize_every_n_steps: null
+
+# Data configuration
+data:
+  data_root: "data/videos"
+  dataset_type: "video"
+  
+  sequence_length: 4  # Shorter sequences
+  frame_skip: 2  # Subsample more
+  
+  batch_size: 2  # Small batch for debugging
+  num_workers: 0  # No multiprocessing for easier debugging
+  pin_memory: false
+  
+  resize_size: [128, 128]  # Smaller images
+  crop_size: [112, 112]
+  normalize: true
+  augment_train: false  # No augmentation for debugging
+  
+  video_ext: ".mp4"
+  image_ext: ".png"
+
+# Trainer configuration
+trainer:
+  max_steps: 1000  # Quick debugging run
+  val_check_interval: 100
+  log_every_n_steps: 10
+  
+  accelerator: "auto"
+  devices: 1
+  
+  precision: "32"  # Full precision for debugging
+  
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  
+  # Debugging flags
+  fast_dev_run: false  # Set to true for single batch test
+  limit_train_batches: 10  # Only use 10 batches per epoch
+  limit_val_batches: 5  # Only use 5 validation batches
+

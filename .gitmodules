@@ -1,0 +1,6 @@
+[submodule "submodules/ttt3r"]
+	path = submodules/ttt3r
+	url = https://github.com/Inception3D/TTT3R.git
+[submodule "submodules/slotcontrast"]
+	path = submodules/slotcontrast
+	url = https://github.com/martius-lab/slotcontrast.git

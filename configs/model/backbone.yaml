@@ -1,0 +1,24 @@
+# TTT3R Backbone Configuration
+# Frozen geometric feature extractor
+
+model_path: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
+input_size: 512
+device: "cuda"
+
+# Freeze all parameters
+frozen: true
+
+# Output features to extract
+outputs:
+  - image_features  # F_t: features for slot attention
+  - camera_pose     # P_t: camera pose for decoder
+  - world_pointmap  # X_world,t: pseudo-GT for supervision
+  - confidence      # Optional: confidence scores
+
+# Memory management
+memory:
+  enabled: true
+  initial_state: null
+  
+# Model update type (should be frozen during POST3R training)
+update_type: "none"  # No updates during POST3R training

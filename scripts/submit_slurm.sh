@@ -1,14 +1,14 @@
 #!/bin/bash
+#SBATCH --account=project_462001066
 #SBATCH --job-name=post3r
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=200GB
-#SBATCH --time=48:00:00
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
-#SBATCH --partition=gpu
+#SBATCH --partition=standard-g
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=4
+#SBATCH --time=1-12:00:00
+
 
 # Print job info
 echo "Job ID: $SLURM_JOB_ID"
@@ -47,6 +47,7 @@ mkdir -p logs
 
 # Training command
 # Add --wandb flag to enable W&B logging
+# srun --partition=<partition> --account=project_462001066 singularity exec -B /scratch/project_462001066 ubuntu_21.04.sif ls /scratch/project_462001066
 python scripts/train.py configs/train/ytvis2021.yaml \
     --data-dir $DATA_DIR \
     --log-dir $OUTPUT_DIR \

@@ -1,15 +1,17 @@
 name: post3r
 channels:
-  - pytorch
+  # - pytorch
   - nvidia
   - conda-forge
   - defaults
 dependencies:
   - python=3.11
   - cmake=3.14.0
-  - pytorch::pytorch>=2.0.0
-  - pytorch::torchvision>=0.15.0
-  - pytorch::pytorch-cuda=12.1
+  # - pytorch::pytorch>=2.0.0
+  # - pytorch::torchvision>=0.15.0
+  # - pytorch::pytorch-cuda=12.1
+  - pytorch>=2.0  # do NOT pin CUDA here; install a ROCm-capable PyTorch inside the ROCm container
+  - torchvision
   - llvm-openmp<16  # Fix for pytorch dataloader issue
   - pip
   - pip:

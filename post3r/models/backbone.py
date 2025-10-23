@@ -78,11 +78,14 @@ class TTT3RBackbone(nn.Module):
         # See: https://github.com/pytorch/pytorch/issues/136155
         try:
             import omegaconf
-            # Add OmegaConf classes to safe globals for checkpoint loading
+            import typing
+            # Add OmegaConf classes and typing classes to safe globals for checkpoint loading
+            # This list may need to be extended based on what's in the checkpoint
             torch.serialization.add_safe_globals([
                 omegaconf.dictconfig.DictConfig,
                 omegaconf.listconfig.ListConfig,
                 omegaconf.base.ContainerMetadata,
+                typing.Any,
             ])
         except ImportError:
             warnings.warn("omegaconf not found - checkpoint loading may fail with PyTorch 2.6+")

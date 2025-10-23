@@ -82,6 +82,7 @@ class TTT3RBackbone(nn.Module):
             torch.serialization.add_safe_globals([
                 omegaconf.dictconfig.DictConfig,
                 omegaconf.listconfig.ListConfig,
+                omegaconf.base.ContainerMetadata,
             ])
         except ImportError:
             warnings.warn("omegaconf not found - checkpoint loading may fail with PyTorch 2.6+")

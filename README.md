@@ -16,7 +16,7 @@ This guide provides everything needed to run training on a computing cluster.
 
 **Clone repository**:
 ```bash
-git clone --recursive https://github.com/yourusername/POST3R.git
+git clone --recursive git@github.com:LiZhYun/POST3R.git
 cd POST3R
 ```
 

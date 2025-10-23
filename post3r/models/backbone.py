@@ -71,8 +71,23 @@ class TTT3RBackbone(nn.Module):
             )
         
         # Load pretrained model
-        # Note: TTT3R checkpoints use OmegaConf which requires weights_only=False in PyTorch 2.6+
+        # Note: TTT3R checkpoints use OmegaConf which requires special handling in PyTorch 2.6+
         print(f"Loading TTT3R model from {model_path}...")
+        
+        # PyTorch 2.6+ requires OmegaConf to be added to safe globals
+        # See: https://github.com/pytorch/pytorch/issues/136155
+        try:
+            import omegaconf
+            # Add OmegaConf classes to safe globals for checkpoint loading
+            torch.serialization.add_safe_globals([
+                omegaconf.dictconfig.DictConfig,
+                omegaconf.listconfig.ListConfig,
+            ])
+        except ImportError:
+            warnings.warn("omegaconf not found - checkpoint loading may fail with PyTorch 2.6+")
+        except Exception as e:
+            warnings.warn(f"Failed to add OmegaConf to safe globals: {e}")
+        
         self.model = ARCroco3DStereo.from_pretrained(model_path).to(device)
         self.model.config.model_update_type = "ttt3r"
 

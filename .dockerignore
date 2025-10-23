@@ -1,0 +1,71 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Data directories
+post3r/data/ytvis2021_raw/
+post3r/data/ytvis2021_resized/
+post3r/data/movi_c/
+data/
+*.tar
+*.zip
+
+# Outputs and logs
+outputs/
+logs/
+wandb/
+*.log
+
+# Model checkpoints (mount these instead)
+*.pth
+*.ckpt
+*.pt
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# Test files
+tests/
+notebooks/
+
+# Environment files (will be copied explicitly)
+# environment.yml
+# requirements.txt

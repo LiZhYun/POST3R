@@ -2,8 +2,8 @@
 # This file is for pip-only installation (not recommended)
 
 # Core dependencies
-torch>=2.0.0
-torchvision>=0.15.0
+torch==2.5.1
+torchvision==0.20.1
 numpy==1.26.4
 einops>=0.6.0
 omegaconf>=2.3.0

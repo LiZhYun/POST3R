@@ -10,8 +10,8 @@ dependencies:
   # - pytorch::pytorch>=2.0.0
   # - pytorch::torchvision>=0.15.0
   # - pytorch::pytorch-cuda=12.1
-  - pytorch>=2.0  # do NOT pin CUDA here; install a ROCm-capable PyTorch inside the ROCm container
-  - torchvision
+  - pytorch==2.5.1  # pinned to PyTorch 2.5.1
+  - torchvision==0.20.1
   - llvm-openmp<16  # Fix for pytorch dataloader issue
   - pip
   - pip:

@@ -237,7 +237,7 @@ class TTT3RBackbone(nn.Module):
         """
         # Disable autocast entirely for ROCm compatibility
         # ROCm's bf16/fp16 autocast causes issues with RoPE position embeddings
-        with torch.cuda.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             return self._forward_impl(frames, return_confidence, reset_memory)
     
     def _forward_impl(
@@ -291,7 +291,7 @@ class TTT3RBackbone(nn.Module):
             
             # Forward through TTT3R model using forward API
             # This is the correct API for batched processing (see inference.py)
-            with torch.cuda.amp.autocast('cuda', enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 output, state_args = self.model([view], ret_state=True)
                 preds = output.ress
             
@@ -424,7 +424,7 @@ class TTT3RBackbone(nn.Module):
         """
         # Disable autocast entirely for ROCm compatibility
         # ROCm's bf16/fp16 autocast causes issues with RoPE position embeddings
-        with torch.cuda.amp.autocast('cuda', enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
             return self._forward_sequence_impl(frames, return_confidence)
     
     def _forward_sequence_impl(

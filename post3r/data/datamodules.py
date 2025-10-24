@@ -377,7 +377,7 @@ class WebdatasetDataModule(pl.LightningDataModule):
             persistent_workers=num_workers > 0,
             # Heuristic to check whether GPUs are used. Misses the case where num_gpus = 1
             pin_memory=(self.num_nodes > 1 and torch.cuda.is_available()),
-            prefetch_factor=2,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
 
         num_batches_per_epoch = None

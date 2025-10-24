@@ -253,6 +253,10 @@ def main():
     """Main training function."""
     args = parser.parse_args()
     
+    # Optimize for AMD MI250X tensor cores (also works for NVIDIA)
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')  # or 'medium' for more precision
+    
     # Load configuration
     config = load_config(args.config, args.config_overrides)
     log_info(f"Configuration:\n{OmegaConf.to_yaml(config)}")

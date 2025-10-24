@@ -1,32 +1,26 @@
-# POST3R Training Configuration for YTVIS2021 Dataset
-experiment_name: "post3r_ytvis2021"
-experiment_group: "ytvis2021"
-
+experiment_name: post3r_ytvis2021
+experiment_group: ytvis2021
 checkpoint_every_n_steps: 5000
-
-# Model configuration
 model:
-  ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
-  
-  num_slots: 11  # YTVIS has multiple objects per scene
+  ttt3r_checkpoint: submodules/ttt3r/src/cut3r_512_dpt_4_64.pth
+  num_slots: 11
   slot_dim: 128
   num_iterations: 3
-  
-  decoder_resolution: [518, 518]  # Match input video resolution
-  
-  learning_rate: 4e-4
-  optimizer_type: "adam"
+  decoder_resolution:
+  - 518
+  - 518
+  learning_rate: 0.0004
+  optimizer_type: adam
   weight_decay: 0.0
-  
-  scheduler_type: "exp_decay_with_warmup"
+  scheduler_type: exp_decay_with_warmup
   warmup_steps: 2500
   decay_steps: 100000
-  
   log_every_n_steps: 1
   visualize: true
   visualize_every_n_steps: 1
-  masks_to_visualize: ["decoder", "grouping"]
-
+  masks_to_visualize:
+  - decoder
+  - grouping
 val_metrics:
   ari:
     name: VideoARI
@@ -52,20 +46,19 @@ val_metrics:
     ignore_background: false
     pred_key: decoder_masks_hard
     true_key: segmentations
-
-# Dataset configuration
 dataset:
-  name: "WebdatasetDataModule"
-  train_shards: "ytvis-train-{000000..000083}.tar"
-  val_shards: "ytvis-validation-{000000..000029}.tar"
-  batch_size: 1  # Reduced from 16 due to memory constraints
+  name: WebdatasetDataModule
+  train_shards: ytvis-train-{000000..000083}.tar
+  val_shards: ytvis-validation-{000000..000029}.tar
+  batch_size: 1
   val_batch_size: 1
   val_size: 200
   num_workers: 4
   num_val_workers: 1
   train_pipeline:
     chunk_size: 4
-    keys: [video]
+    keys:
+    - video
     sample_one_chunk_per_video: true
     transforms:
       name: ytvis_train
@@ -75,28 +68,22 @@ dataset:
       num_classes: 10
   val_pipeline:
     use_chunks: false
-    keys: [video, segmentations]
+    keys:
+    - video
+    - segmentations
     transforms:
       name: ytvis_val
       type: video
       crop_type: central
       input_size: 518
       num_classes: 25
-
-# Trainer configuration
 trainer:
   max_steps: 1
   val_check_interval: 5000
   log_every_n_steps: 100
-  
-  accelerator: "auto"
+  accelerator: auto
   devices: 1
-  
-  precision: "32"
-  
+  precision: 16-mixed
   gradient_clip_val: 0.05
   accumulate_grad_batches: 1
-  
-  # DDP settings (if using multiple GPUs)
-  strategy: "auto"
-# python scripts/train.py configs/train/ytvis2021.yaml --data-dir post3r/data/ytvis2021_resized --log-dir ./outputs
+  strategy: auto

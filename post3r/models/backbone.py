@@ -39,7 +39,7 @@ class TTT3RBackbone(nn.Module):
         self,
         model_path: str,
         input_size: int = 512,
-        device: str = 'cuda',
+        device: str = 'cpu',
         frozen: bool = True,
         extract_features_from: str = 'encoder',
     ):
@@ -235,6 +235,17 @@ class TTT3RBackbone(nn.Module):
             - 'pointmap': 3D pointmaps (B, H, W, 3) in world coords
             - 'confidence': Optional confidence scores (B, H, W)
         """
+        # Disable autocast entirely for ROCm compatibility
+        # ROCm's bf16/fp16 autocast causes issues with RoPE position embeddings
+        with torch.cuda.amp.autocast(enabled=False):
+            return self._forward_impl(frames, return_confidence, reset_memory)
+    
+    def _forward_impl(
+        self,
+        frames: torch.Tensor,
+        return_confidence: bool = True,
+        reset_memory: bool = False,
+    ) -> Dict[str, torch.Tensor]:
         if reset_memory:
             self.reset_memory()
         # Ensure no gradients
@@ -411,6 +422,16 @@ class TTT3RBackbone(nn.Module):
             - 'pointmap': 3D pointmaps (B, T, H, W, 3)
             - 'confidence': Optional confidence scores (B, T, H, W)
         """
+        # Disable autocast entirely for ROCm compatibility
+        # ROCm's bf16/fp16 autocast causes issues with RoPE position embeddings
+        with torch.cuda.amp.autocast(enabled=False):
+            return self._forward_sequence_impl(frames, return_confidence)
+    
+    def _forward_sequence_impl(
+        self,
+        frames: torch.Tensor,
+        return_confidence: bool = True,
+    ) -> Dict[str, torch.Tensor]:
         with torch.no_grad():
             B, T, C, H, W = frames.shape
             
@@ -453,9 +474,8 @@ class TTT3RBackbone(nn.Module):
                 }
                 
                 # Process single frame
-                with torch.cuda.amp.autocast(enabled=False):
-                    output, state_args = self.model([view], ret_state=True)
-                    preds.append(output.ress[0])
+                output, state_args = self.model([view], ret_state=True)
+                preds.append(output.ress[0])
                 
                 # Update memory state for next frame
                 if state_args:

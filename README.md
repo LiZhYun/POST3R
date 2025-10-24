@@ -22,13 +22,62 @@ cd POST3R
 
 **Create conda environment**:
 ```bash
+conda create -n post3r python=3.11 cmake=3.14.0
+conda activate post3r
+```
+
+**Install PyTorch with GPU support**:
+```bash
+# For NVIDIA GPUs (adjust pytorch-cuda version for your system)
+conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+
+# For AMD GPUs (ROCm): Use Docker instead (see below)
+```
+
+**Install other dependencies**:
+```bash
+pip install -r requirements.txt
+```
+
+**Fix for PyTorch dataloader issue**:
+```bash
+# See https://github.com/pytorch/pytorch/issues/99625
+conda install 'llvm-openmp<16'
+```
+
+**Install evaluation tools**:
+```bash
+pip install evo
+pip install open3d
+```
+
+**Verify GPU support**:
+```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
+```
+
+> **⚠️ Important**: Always install PyTorch via conda with the appropriate CUDA version before installing other dependencies. This ensures GPU support is properly configured.
+
+#### Alternative: Using environment.yml (All-in-one)
+
+```bash
 conda env create -f environment.yml
 conda activate post3r
 ```
 
-**Install llvm-openmp fix** (important for dataloaders):
+#### For AMD GPUs (ROCm) - Use Docker
+
 ```bash
-conda install 'llvm-openmp<16'
+# Pull the ROCm container with PyTorch 2.5.1
+docker pull rocm/pytorch:rocm7.0.2_ubuntu22.04_py3.10_pytorch_release_2.5.1
+
+# Build POST3R container
+docker build -t post3r-rocm .
+
+# Run container
+docker run --rm -it --device=/dev/kfd --device=/dev/dri \
+  --group-add video --ipc=host --shm-size 8G \
+  -v $(pwd):/workspace post3r-rocm
 ```
 
 **Setup Weights & Biases (optional)**:

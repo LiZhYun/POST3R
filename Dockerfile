@@ -1,5 +1,6 @@
 # Dockerfile for POST3R on AMD GPUs (CSC LUMI)
-FROM rocm/pytorch:latest
+# Using ROCm 7.0.2 with Ubuntu 22.04, Python 3.10, PyTorch 2.5.1
+FROM rocm/pytorch:rocm7.0.2_ubuntu22.04_py3.10_pytorch_release_2.5.1
 
 # Set up working directory
 WORKDIR /workspace

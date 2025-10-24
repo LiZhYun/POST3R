@@ -2,8 +2,13 @@
 # This file is for pip-only installation (not recommended)
 
 # Core dependencies
-torch==2.5.1
-torchvision==0.20.1
+# PyTorch installation:
+# Install PyTorch separately BEFORE using this requirements.txt:
+#   For NVIDIA GPUs: conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+#   For AMD GPUs: Use the rocm/pytorch Docker container
+#   For CPU only: conda install pytorch torchvision cpuonly -c pytorch
+# 
+# DO NOT install torch/torchvision from pip directly as it may install CPU version
 numpy==1.26.4
 einops>=0.6.0
 omegaconf>=2.3.0

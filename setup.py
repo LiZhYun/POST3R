@@ -9,8 +9,9 @@ setup(
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
-        "torch>=2.0.0",
-        "torchvision>=0.15.0",
+        # NOTE: torch and torchvision should be installed separately via conda
+        # conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+        # Do not include torch/torchvision here to avoid overriding conda installation
         "numpy>=1.24.0",
         "einops>=0.6.0",
         "omegaconf>=2.3.0",

@@ -39,7 +39,7 @@ class TTT3RBackbone(nn.Module):
         self,
         model_path: str,
         input_size: int = 512,
-        device: str = 'cpu',
+        device: str = 'cuda',
         frozen: bool = True,
         extract_features_from: str = 'encoder',
     ):

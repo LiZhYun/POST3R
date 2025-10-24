@@ -9,6 +9,7 @@
 #   For CPU only: conda install pytorch torchvision cpuonly -c pytorch
 # 
 # DO NOT install torch/torchvision from pip directly as it may install CPU version
+# Note: torchvision is installed separately in Docker to match the torch version
 numpy==1.26.4
 einops>=0.6.0
 omegaconf>=2.3.0
@@ -23,7 +24,7 @@ transformers
 
 # TTT3R/DUSt3R dependencies
 roma
-huggingface-hub[torch]>=0.22
+huggingface-hub>=0.22  # Note: removed [torch] extra to avoid PyTorch reinstallation
 trimesh
 h5py
 

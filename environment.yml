@@ -32,7 +32,7 @@ dependencies:
       
       # TTT3R/DUSt3R dependencies
       - roma
-      - huggingface-hub[torch]>=0.22
+      - huggingface-hub>=0.22  # Note: removed [torch] extra to avoid PyTorch reinstallation
       - trimesh
       - h5py
       

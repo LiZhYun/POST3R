@@ -69,7 +69,7 @@ conda activate post3r
 
 ```bash
 # Pull the ROCm container with PyTorch 2.5.1
-docker pull rocm/pytorch:rocm7.0.2_ubuntu22.04_py3.10_pytorch_release_2.5.1
+docker pull rocm/pytorch:rocm7.0_ubuntu24.04_py3.12_pytorch_release_2.5.1
 
 # Build POST3R container
 docker build -t post3r-rocm .

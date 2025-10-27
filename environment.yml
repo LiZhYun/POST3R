@@ -8,12 +8,19 @@ dependencies:
   - python=3.11
   - cmake=3.14.0
   # PyTorch with CUDA support - adjust pytorch-cuda version for your system
-  # For CUDA 12.1: pytorch-cuda=12.1
-  # For CUDA 11.8: pytorch-cuda=11.8
-  # For AMD GPUs (ROCm): Use the rocm/pytorch Docker container instead
+  # For NVIDIA CUDA 12.1: pytorch-cuda=12.1
+  # For NVIDIA CUDA 11.8: pytorch-cuda=11.8
+  # For AMD GPUs (ROCm 6.0): Comment out pytorch/torchvision/pytorch-cuda below and use pip install after conda env creation
+  #   pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+  
+  # NVIDIA GPU installation (comment out for AMD ROCm):
   - pytorch::pytorch==2.5.1
   - pytorch::torchvision==0.20.1
   - pytorch::pytorch-cuda=12.1
+  
+  # AMD ROCm installation: Comment out the 3 lines above, then after creating the environment run:
+  # pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+  
   - llvm-openmp<16  # Fix for pytorch dataloader issue
   - pip
   - pip:

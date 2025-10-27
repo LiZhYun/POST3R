@@ -31,7 +31,8 @@ conda activate post3r
 # For NVIDIA GPUs (adjust pytorch-cuda version for your system)
 conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
 
-# For AMD GPUs (ROCm): Use Docker instead (see below)
+# For AMD GPUs with ROCm 6.0
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
 ```
 
 **Install other dependencies**:
@@ -53,19 +54,43 @@ pip install open3d
 
 **Verify GPU support**:
 ```bash
+# For NVIDIA GPUs
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
+
+# For AMD GPUs (ROCm)
+python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}'); print(f'Device name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
 ```
 
-> **⚠️ Important**: Always install PyTorch via conda with the appropriate CUDA version before installing other dependencies. This ensures GPU support is properly configured.
+> **⚠️ Important for NVIDIA**: Always install PyTorch via conda with the appropriate CUDA version before installing other dependencies.
+> 
+> **⚠️ Important for AMD (ROCm)**: Install PyTorch via pip with the ROCm index URL as shown above. ROCm 6.0 requires PyTorch 2.3.1.
 
-#### Alternative: Using environment.yml (All-in-one)
+#### Alternative: Using environment.yml (All-in-one for NVIDIA)
 
 ```bash
+# For NVIDIA GPUs
 conda env create -f environment.yml
 conda activate post3r
 ```
 
-#### For AMD GPUs (ROCm) - Use Docker
+#### For AMD GPUs (ROCm) - Conda + Pip Method
+
+```bash
+# Create base conda environment
+conda create -n post3r python=3.11 cmake=3.14.0
+conda activate post3r
+
+# Install PyTorch with ROCm 6.0
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+
+# Install remaining dependencies
+pip install -r requirements-rocm.txt
+
+# Fix for PyTorch dataloader
+conda install 'llvm-openmp<16'
+```
+
+#### For AMD GPUs (ROCm) - Alternative Docker Method
 
 ```bash
 # Pull the ROCm container with PyTorch 2.5.1
@@ -86,14 +111,16 @@ wandb login
 # Follow the prompt to enter your API key from https://wandb.ai/authorize
 ```
 
-**Compile CUDA kernels** (required for TTT3R):
+**Compile CUDA/ROCm kernels** (required for TTT3R):
 ```bash
 cd submodules/ttt3r/src/croco/models/curope/
 python setup.py build_ext --inplace
 cd -
 ```
 
-> **Note**: Ensure your CUDA toolkit version matches PyTorch. Check with `nvcc --version` and `python -c "import torch; print(torch.version.cuda)"`
+> **Note for NVIDIA**: Ensure your CUDA toolkit version matches PyTorch. Check with `nvcc --version` and `python -c "import torch; print(torch.version.cuda)"`
+> 
+> **Note for AMD (ROCm)**: The kernels should compile with HIP. Ensure ROCm is properly installed on your system (`rocm-smi` should work).
 
 ### Step 2: Download TTT3R Checkpoint
 
@@ -422,6 +449,8 @@ print('Val batches:', len(datamodule.val_dataloader()))
 ## Quick Reference
 
 ### Minimal Working Example
+
+**For NVIDIA GPUs:**
 ```bash
 # 1. Setup
 conda env create -f environment.yml
@@ -431,6 +460,24 @@ wandb login  # Optional: for W&B logging
 cd submodules/ttt3r/src/croco/models/curope/
 python setup.py build_ext --inplace
 cd -
+```
+
+**For AMD GPUs (ROCm 6.0):**
+```bash
+# 1. Setup
+conda create -n post3r python=3.11 cmake=3.14.0
+conda activate post3r
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+pip install -r requirements-rocm.txt
+conda install 'llvm-openmp<16'
+wandb login  # Optional: for W&B logging
+cd submodules/ttt3r/src/croco/models/curope/
+python setup.py build_ext --inplace
+cd -
+```
+
+**Continue with (both NVIDIA and AMD):**
+```bash
 
 # 2. Download checkpoint
 cd submodules/ttt3r/src

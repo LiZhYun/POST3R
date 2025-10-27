@@ -68,6 +68,9 @@ echo "Batch size: ${BATCH_SIZE} (per GPU)"
 echo "Workers: ${NUM_WORKERS}"
 echo "GPUs: ${NUM_GPUS}"
 echo ""
+
+# srun --jobid 8704360 --interactive --pty /bin/bash
+# watch -n1 rocm-smi
 # srun --account=project_462001066 --partition=small-g --gpus-per-node=1  --time=00:30:00 --nodes=1 --pty bash
 # singularity shell --rocm -B /scratch/project_462001066,/project/project_462001066,/project/project_462001066/POST3R:/workspace  /scratch/project_462001066/post3r-lumi_latest.sif
 # python scripts/train.py configs/train/ytvis2021.yaml --data-dir /scratch/project_462001066/POST3R/data/ytvis2021_resized --log-dir /scratch/project_462001066/POST3R/output

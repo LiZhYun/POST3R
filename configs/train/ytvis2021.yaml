@@ -8,13 +8,13 @@ checkpoint_every_n_steps: 5000
 model:
   ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
   
-  num_slots: 11  # YTVIS has multiple objects per scene
-  slot_dim: 128
+  num_slots: 7
+  slot_dim: 64
   num_iterations: 3
   
   decoder_resolution: [518, 518]  # Match input video resolution
   
-  learning_rate: 4e-4
+  learning_rate: 0.0001
   optimizer_type: "adam"
   weight_decay: 0.0
   
@@ -22,9 +22,9 @@ model:
   warmup_steps: 2500
   decay_steps: 100000
   
-  log_every_n_steps: 1
+  log_every_n_steps: 2500
   visualize: true
-  visualize_every_n_steps: 1
+  visualize_every_n_steps: 10000
   masks_to_visualize: ["decoder", "grouping"]
 
 val_metrics:
@@ -58,11 +58,11 @@ dataset:
   name: "WebdatasetDataModule"
   train_shards: "ytvis-train-{000000..000083}.tar"
   val_shards: "ytvis-validation-{000000..000029}.tar"
-  batch_size: 1  # Reduced from 16 due to memory constraints
+  batch_size: 2
   val_batch_size: 1
   val_size: 200
-  num_workers: 0
-  num_val_workers: 0
+  num_workers: 4
+  num_val_workers: 1
   train_pipeline:
     chunk_size: 4
     keys: [video]
@@ -85,9 +85,9 @@ dataset:
 
 # Trainer configuration
 trainer:
-  max_steps: 1
-  val_check_interval: 5000
-  log_every_n_steps: 100
+  max_steps: 100000
+  val_check_interval: 2500
+  log_every_n_steps: 2500
   
   accelerator: "auto"
   devices: 1

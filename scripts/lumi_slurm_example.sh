@@ -77,15 +77,21 @@ echo ""
 # module load OpenGL/24.03-cpeGNU-24.03
 # module load cray-mpich
 # module load cray-libfabric
+# module load rocm
+# module load cray-python
+# source /scratch/project_462001066/post3r/bin/activate
+
 # export SIF=/scratch/project_462001066/lumi-pytorch-rocm-6.0.3-python-3.12-pytorch-v2.3.1.sif
 # singularity shell --rocm -B /opt/cray/libfabric/1.15.2.0/lib64/,/opt/cray/pe/mpich/8.1.29/gtl/lib/,/opt/cray/pe/mpich/8.1.29/ofi/cray/17.0/lib,/usr/lib64:/usr/lib64,/usr/lib:/usr/lib,/scratch/project_462001066,/project/project_462001066,/project/project_462001066/POST3R:/workspace $SIF
 # singularity exec $SIF bash -c '$WITH_CONDA && pip list'
 # module use /appl/local/containers/ai-modules
 # module load singularity-AI-bindings
 # $WITH_CONDA
-# source post3r/bin/activate
+# source /scratch/project_462001066/post3r/bin/activate
 # export LD_LIBRARY_PATH=/opt/cray/libfabric/1.15.2.0/lib64/:/opt/cray/pe/mpich/8.1.29/gtl/lib/:/opt/cray/pe/mpich/8.1.29/ofi/cray/17.0/lib:$LD_LIBRARY_PATH
 # ldconfig -p | grep libmpi_cray
+
+
 singularity exec \
     --rocm \
     --bind "${DATA_DIR}:/workspace/post3r/data" \

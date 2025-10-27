@@ -14,18 +14,27 @@
 # ============================================
 # POST3R Training on CSC LUMI with ROCm
 # ============================================
-# 
 
-SINGULARITY_IMAGE="/scratch/project_462001066/post3r-lumi_latest.sif"
+module load LUMI/24.03  partition/G
+module load OpenGL/24.03-cpeGNU-24.03
+module load cray-mpich
+module load cray-libfabric
+module load rocm
+module load cray-python
+source /scratch/project_462001066/post3r/bin/activate
+
+# # Safe env vars
+# export PYTHONUNBUFFERED=1
+# export PYTHONFAULTHANDLER=1
+# export HDF5_USE_FILE_LOCKING=FALSE
+# export OMP_NUM_THREADS=1
+# export MKL_NUM_THREADS=1
+# export NUMEXPR_NUM_THREADS=1
+
 DATA_DIR="/scratch/project_462001066/POST3R/data/ytvis2021_resized"
 OUTPUT_DIR="/scratch/project_462001066/POST3R/output"
 
-singularity exec \
-    --rocm \
-    --bind "/scratch/project_462001066" \
-    --bind "/project/project_462001066/POST3R:/workspace" \
-    "${SINGULARITY_IMAGE}" \
-    python scripts/train.py "configs/train/ytvis2021.yaml" \
+srun python scripts/train.py "configs/train/ytvis2021.yaml" \
         --data-dir ${DATA_DIR} \
         --log-dir ${OUTPUT_DIR}
 

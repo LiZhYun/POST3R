@@ -516,7 +516,7 @@ class POST3RLightningModule(pl.LightningModule):
             masks = masks_resized.view(B, T, K, H_vid, W_vid)
         
         # Create color palette for slots
-        colors = torch.tensor([
+        base_colors = torch.tensor([
             [1.0, 0.0, 0.0],  # Red
             [0.0, 1.0, 0.0],  # Green
             [0.0, 0.0, 1.0],  # Blue
@@ -527,9 +527,12 @@ class POST3RLightningModule(pl.LightningModule):
             [0.5, 0.0, 1.0],  # Purple
         ], device=videos.device)
         
-        # Repeat if more slots than colors
-        if K > len(colors):
-            colors = colors.repeat((K // len(colors)) + 1, 1)[:K]
+        # Ensure we have exactly K colors (repeat or slice as needed)
+        if K <= len(base_colors):
+            colors = base_colors[:K]
+        else:
+            # Repeat colors to cover all K slots
+            colors = base_colors.repeat((K // len(base_colors)) + 1, 1)[:K]
         
         # Denormalize videos (assuming ImageNet normalization)
         mean = torch.tensor([0.485, 0.456, 0.406], device=videos.device).view(1, 1, 3, 1, 1)

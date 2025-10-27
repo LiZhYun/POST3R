@@ -64,3 +64,14 @@ datasets/
 tmp/
 temp/
 *.tmp
+
+lib/
+lib64/
+etc/
+bin/
+include/
+share/
+gpucore.*
+core
+lib64
+*.cfg

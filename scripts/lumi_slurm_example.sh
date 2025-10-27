@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=post3r_train
-#SBATCH --account=project_<YOUR_PROJECT_ID>
+#SBATCH --account=project_462001066
 #SBATCH --partition=small-g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
-#SBATCH --gpus-per-node=4
-#SBATCH --mem=240G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=64G
+#SBATCH --time=400:30:00
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
 
@@ -15,12 +15,6 @@
 # POST3R Training on CSC LUMI with ROCm
 # ============================================
 # 
-# Before running:
-# 1. Replace <YOUR_PROJECT_ID> with your LUMI project ID
-# 2. Update paths for data and singularity image
-# 3. Create logs directory: mkdir -p logs
-# 4. Submit with: sbatch lumi_slurm_example.sh
-#
 
 set -e
 
@@ -74,8 +68,24 @@ echo "Batch size: ${BATCH_SIZE} (per GPU)"
 echo "Workers: ${NUM_WORKERS}"
 echo "GPUs: ${NUM_GPUS}"
 echo ""
-
+# srun --account=project_462001066 --partition=small-g --gpus-per-node=1  --time=00:30:00 --nodes=1 --pty bash
+# singularity shell --rocm -B /scratch/project_462001066,/project/project_462001066,/project/project_462001066/POST3R:/workspace  /scratch/project_462001066/post3r-lumi_latest.sif
+# python scripts/train.py configs/train/ytvis2021.yaml --data-dir /scratch/project_462001066/POST3R/data/ytvis2021_resized --log-dir /scratch/project_462001066/POST3R/output
 # Run training inside Singularity container
+
+# module load LUMI/24.03  partition/G
+# module load OpenGL/24.03-cpeGNU-24.03
+# module load cray-mpich
+# module load cray-libfabric
+# export SIF=/scratch/project_462001066/lumi-pytorch-rocm-6.0.3-python-3.12-pytorch-v2.3.1.sif
+# singularity shell --rocm -B /opt/cray/libfabric/1.15.2.0/lib64/,/opt/cray/pe/mpich/8.1.29/gtl/lib/,/opt/cray/pe/mpich/8.1.29/ofi/cray/17.0/lib,/usr/lib64:/usr/lib64,/usr/lib:/usr/lib,/scratch/project_462001066,/project/project_462001066,/project/project_462001066/POST3R:/workspace $SIF
+# singularity exec $SIF bash -c '$WITH_CONDA && pip list'
+# module use /appl/local/containers/ai-modules
+# module load singularity-AI-bindings
+# $WITH_CONDA
+# source post3r/bin/activate
+# export LD_LIBRARY_PATH=/opt/cray/libfabric/1.15.2.0/lib64/:/opt/cray/pe/mpich/8.1.29/gtl/lib/:/opt/cray/pe/mpich/8.1.29/ofi/cray/17.0/lib:$LD_LIBRARY_PATH
+# ldconfig -p | grep libmpi_cray
 singularity exec \
     --rocm \
     --bind "${DATA_DIR}:/workspace/post3r/data" \

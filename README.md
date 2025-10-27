@@ -8,121 +8,73 @@ POST3R combines Slot Attention with TTT3R's 3D backbone to learn object-centric 
 
 ---
 
-## Setup for Cluster Training
+## Setup Instructions
 
-This guide provides everything needed to run training on a computing cluster.
+Choose the setup guide that matches your system:
+- **[Setup for NVIDIA GPUs (Local/Cluster)](#setup-for-nvidia-gpus)** - For local machines or clusters with NVIDIA GPUs
+- **[Setup for CSC LUMI (AMD GPUs)](#setup-for-csc-lumi-amd-gpus)** - For LUMI supercomputer with AMD GPUs
 
-### Step 1: Environment Setup
+---
 
-**Clone repository**:
+## Setup for NVIDIA GPUs
+
+This guide is for local machines or clusters with NVIDIA GPUs using conda.
+
+### Step 1: Clone Repository
+
 ```bash
 git clone --recursive git@github.com:LiZhYun/POST3R.git
 cd POST3R
 ```
 
-**Create conda environment**:
+### Step 2: Create Conda Environment
+
+**Option A: Using environment.yml (Recommended)**
 ```bash
-conda create -n post3r python=3.11 cmake=3.14.0
-conda activate post3r
-```
-
-**Install PyTorch with GPU support**:
-```bash
-# For NVIDIA GPUs (adjust pytorch-cuda version for your system)
-conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
-
-# For AMD GPUs with ROCm 6.0
-pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
-```
-
-**Install other dependencies**:
-```bash
-pip install -r requirements.txt
-```
-
-**Fix for PyTorch dataloader issue**:
-```bash
-# See https://github.com/pytorch/pytorch/issues/99625
-conda install 'llvm-openmp<16'
-```
-
-**Install evaluation tools**:
-```bash
-pip install evo
-pip install open3d
-```
-
-**Verify GPU support**:
-```bash
-# For NVIDIA GPUs
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
-
-# For AMD GPUs (ROCm)
-python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}'); print(f'Device name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
-```
-
-> **⚠️ Important for NVIDIA**: Always install PyTorch via conda with the appropriate CUDA version before installing other dependencies.
-> 
-> **⚠️ Important for AMD (ROCm)**: Install PyTorch via pip with the ROCm index URL as shown above. ROCm 6.0 requires PyTorch 2.3.1.
-
-#### Alternative: Using environment.yml (All-in-one for NVIDIA)
-
-```bash
-# For NVIDIA GPUs
 conda env create -f environment.yml
 conda activate post3r
 ```
 
-#### For AMD GPUs (ROCm) - Conda + Pip Method
-
+**Option B: Manual Setup**
 ```bash
-# Create base conda environment
+# Create environment
 conda create -n post3r python=3.11 cmake=3.14.0
 conda activate post3r
 
-# Install PyTorch with ROCm 6.0
-pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+# Install PyTorch with CUDA support (adjust pytorch-cuda version for your system)
+conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
 
-# Install remaining dependencies
-pip install -r requirements-rocm.txt
+# Install other dependencies
+pip install -r requirements.txt
 
-# Fix for PyTorch dataloader
+# Fix for PyTorch dataloader issue (see https://github.com/pytorch/pytorch/issues/99625)
 conda install 'llvm-openmp<16'
 ```
 
-#### For AMD GPUs (ROCm) - Alternative Docker Method
+### Step 3: Verify GPU Support
 
 ```bash
-# Pull the ROCm container with PyTorch 2.5.1
-docker pull rocm/pytorch:rocm7.0_ubuntu24.04_py3.12_pytorch_release_2.5.1
-
-# Build POST3R container
-docker build -t post3r-rocm .
-
-# Run container
-docker run --rm -it --device=/dev/kfd --device=/dev/dri \
-  --group-add video --ipc=host --shm-size 8G \
-  -v $(pwd):/workspace post3r-rocm
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
 ```
 
-**Setup Weights & Biases (optional)**:
+> **⚠️ Important**: Ensure your CUDA toolkit version matches PyTorch. Check with `nvcc --version` and `python -c "import torch; print(torch.version.cuda)"`
+
+### Step 4: Setup Weights & Biases (Optional)
+
 ```bash
 wandb login
 # Follow the prompt to enter your API key from https://wandb.ai/authorize
 ```
 
-**Compile CUDA/ROCm kernels** (required for TTT3R):
+### Step 5: Compile CUDA Kernels
+
 ```bash
 cd submodules/ttt3r/src/croco/models/curope/
 python setup.py build_ext --inplace
 cd -
 ```
 
-> **Note for NVIDIA**: Ensure your CUDA toolkit version matches PyTorch. Check with `nvcc --version` and `python -c "import torch; print(torch.version.cuda)"`
-> 
-> **Note for AMD (ROCm)**: The kernels should compile with HIP. Ensure ROCm is properly installed on your system (`rocm-smi` should work).
-
-### Step 2: Download TTT3R Checkpoint
+### Step 6: Download TTT3R Checkpoint
 
 **Required checkpoint**: `cut3r_512_dpt_4_64.pth` (~2.8GB)
 
@@ -140,7 +92,93 @@ ls -lh submodules/ttt3r/src/cut3r_512_dpt_4_64.pth
 
 > **Alternative**: Download manually from [Google Drive](https://drive.google.com/file/d/1Asz-ZB3FfpzZYwunhQvNPZEUA8XUNAYD/view?usp=drive_link) and place in `submodules/ttt3r/src/`
 
-### Step 3: Prepare Dataset
+### Step 7: Prepare Dataset
+
+See [Dataset Preparation](#dataset-preparation) section below.
+
+---
+
+## Setup for CSC LUMI (AMD GPUs)
+
+This guide is specifically for the LUMI supercomputer with AMD GPUs using ROCm 6.0.
+
+### Step 1: Clone Repository
+
+```bash
+git clone --recursive git@github.com:LiZhYun/POST3R.git
+cd POST3R
+```
+
+### Step 2: Load Python Module
+
+```bash
+module load cray-python
+```
+
+### Step 3: Create Virtual Environment
+
+```bash
+# Create venv in your home directory
+python -m venv ~/post3r
+
+# Activate the environment
+source ~/post3r/bin/activate
+```
+
+### Step 4: Install PyTorch with ROCm 6.0
+
+```bash
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
+```
+
+### Step 5: Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 6: Verify GPU Support
+
+```bash
+python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}')"
+```
+
+> **💡 Tip**: Use `rocm-smi` to check GPU status on LUMI compute nodes.
+
+### Step 7: Setup Weights & Biases (Optional)
+
+```bash
+wandb login
+# Or set API key as environment variable
+export WANDB_API_KEY="your_api_key_here"
+```
+
+### Step 8: Fix RoPE2D for ROCm Compatibility
+
+```bash
+# Follow https://github.com/CUT3R/CUT3R/issues/26 to replace RoPE2D code
+```
+
+### Step 9: Download TTT3R Checkpoint
+
+**Required checkpoint**: `cut3r_512_dpt_4_64.pth` (~2.8GB)
+
+```bash
+cd submodules/ttt3r/src
+# Download on your local machine and transfer to LUMI, or use wget if accessible
+# gdown may not work on LUMI compute nodes
+cd -
+```
+
+### Step 10: Prepare Dataset
+
+See [Dataset Preparation](#dataset-preparation) section below.
+
+> **💾 Storage**: Use `/scratch/project_<your_project>/` for datasets and outputs on LUMI for better I/O performance.
+
+---
+
+## Dataset Preparation
 
 **YTVIS2021** (recommended for training):
 
@@ -224,9 +262,9 @@ python scripts/train.py configs/train/ytvis2021.yaml \
     trainer.strategy=ddp
 ```
 
-### Cluster-Specific: SLURM
+### NVIDIA Cluster with SLURM
 
-Create `scripts/submit_train.sh`:
+Create `scripts/submit_train_nvidia.sh`:
 ```bash
 #!/bin/bash
 #SBATCH --job-name=post3r
@@ -251,7 +289,52 @@ python scripts/train.py configs/train/ytvis2021.yaml \
     trainer.strategy=ddp
 ```
 
-Submit with: `sbatch scripts/submit_train.sh`
+Submit with: `sbatch scripts/submit_train_nvidia.sh`
+
+### LUMI SLURM
+
+Create `scripts/submit_train_lumi.sh`:
+```bash
+#!/bin/bash
+#SBATCH --job-name=post3r-train
+#SBATCH --account=project_<your_project>
+#SBATCH --partition=small-g
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=7
+#SBATCH --gpus-per-node=8
+#SBATCH --mem=480G
+#SBATCH --time=48:00:00
+#SBATCH --output=logs/train_%j.out
+#SBATCH --error=logs/train_%j.err
+
+# Create logs directory
+mkdir -p logs
+
+# Load required modules
+module load cray-python
+
+# Activate virtual environment
+source ~/post3r/bin/activate
+
+# Set environment variables for ROCm
+export MIOPEN_USER_DB_PATH=/tmp/${USER}-miopen-cache-${SLURM_JOB_ID}
+export MIOPEN_CUSTOM_CACHE_DIR=${MIOPEN_USER_DB_PATH}
+
+# Training
+python scripts/train.py configs/train/ytvis2021.yaml \
+    --data-dir /scratch/project_<your_project>/post3r/data/ytvis2021_resized \
+    --log-dir /scratch/project_<your_project>/post3r/outputs \
+    trainer.devices=8 \
+    trainer.strategy=ddp
+
+# Clean up
+rm -rf ${MIOPEN_USER_DB_PATH}
+```
+
+Submit with: `sbatch scripts/submit_train_lumi.sh`
+
+> **📖 More LUMI Examples**: See [LUMI_SETUP.md](LUMI_SETUP.md) for multi-node training and additional SLURM configurations.
 
 ### Key Configuration Options
 
@@ -347,7 +430,11 @@ watch -n 5 'tail -n 20 outputs/post3r/20251022_143000/logs/metrics/metrics.csv'
 
 **GPU usage**:
 ```bash
+# For NVIDIA GPUs
 watch -n 1 nvidia-smi
+
+# For AMD GPUs (LUMI)
+watch -n 1 rocm-smi
 ```
 
 ---
@@ -396,11 +483,24 @@ rm cut3r_512_dpt_4_64.pth
 gdown --fuzzy https://drive.google.com/file/d/1Asz-ZB3FfpzZYwunhQvNPZEUA8XUNAYD/view?usp=drive_link
 ```
 
-### RoPE CUDA Kernel Errors
+### RoPE CUDA/ROCm Kernel Errors
+
+**For NVIDIA GPUs:**
 ```bash
 # Check CUDA version match
 nvcc --version
 python -c "import torch; print(torch.version.cuda)"
+
+# Recompile kernels
+cd submodules/ttt3r/src/croco/models/curope/
+python setup.py clean --all
+python setup.py build_ext --inplace
+```
+
+**For AMD GPUs (LUMI):**
+```bash
+# Check ROCm version
+python -c "import torch; print(torch.version.hip)"
 
 # Recompile kernels
 cd submodules/ttt3r/src/croco/models/curope/
@@ -462,15 +562,19 @@ python setup.py build_ext --inplace
 cd -
 ```
 
-**For AMD GPUs (ROCm 6.0):**
+**For AMD GPUs (ROCm 6.0) - LUMI:**
 ```bash
 # 1. Setup
-conda create -n post3r python=3.11 cmake=3.14.0
-conda activate post3r
+module load cray-python
+python -m venv ~/post3r
+source ~/post3r/bin/activate
 pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm6.0
-pip install -r requirements-rocm.txt
-conda install 'llvm-openmp<16'
+pip install -r requirements.txt
 wandb login  # Optional: for W&B logging
+
+# 2. Fix RoPE2D for ROCm (see https://github.com/CUT3R/CUT3R/issues/26)
+
+# 3. Compile kernels
 cd submodules/ttt3r/src/croco/models/curope/
 python setup.py build_ext --inplace
 cd -
@@ -495,9 +599,13 @@ python scripts/train.py configs/train/ytvis2021.yaml
 ```
 
 ### File Checklist Before Training
+
+**Both NVIDIA and LUMI:**
 - ✅ `submodules/ttt3r/src/cut3r_512_dpt_4_64.pth` exists (~2.8GB)
 - ✅ `post3r/data/ytvis2021_resized/*.tar` files exist
 - ✅ `submodules/ttt3r/src/croco/models/curope/*.so` compiled
+
+**NVIDIA only:**
 - ✅ `conda list | grep llvm-openmp` shows version < 16
 
 ### GPU Memory Requirements

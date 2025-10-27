@@ -23,14 +23,6 @@ module load rocm
 module load cray-python
 source /scratch/project_462001066/post3r/bin/activate
 
-# # Safe env vars
-# export PYTHONUNBUFFERED=1
-# export PYTHONFAULTHANDLER=1
-# export HDF5_USE_FILE_LOCKING=FALSE
-# export OMP_NUM_THREADS=1
-# export MKL_NUM_THREADS=1
-# export NUMEXPR_NUM_THREADS=1
-
 DATA_DIR="/scratch/project_462001066/POST3R/data/ytvis2021_resized"
 OUTPUT_DIR="/scratch/project_462001066/POST3R/output"
 

@@ -11,9 +11,9 @@ model:
   num_slots: 7
   slot_dim: 64
   num_iterations: 3
-  
-  decoder_resolution: [518, 518]  # Match input video resolution
-  
+
+  decoder_resolution: [128, 128]  # Match input video resolution
+
   learning_rate: 0.0001
   optimizer_type: "adam"
   weight_decay: 0.0

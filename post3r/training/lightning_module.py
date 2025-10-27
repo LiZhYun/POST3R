@@ -268,8 +268,24 @@ class POST3RLightningModule(pl.LightningModule):
         
         for t in range(num_frames):
             # Get predictions and targets for frame t
-            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H, W, 3)
-            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H, W, 3)
+            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
+            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
+            
+            # Resize ground truth to match decoder resolution if needed
+            B, H_dec, W_dec, _ = pred_pointmap.shape
+            _, H_gt, W_gt, _ = gt_pointmap.shape
+            
+            if (H_dec, W_dec) != (H_gt, W_gt):
+                # Transpose to (B, C, H, W) for interpolation
+                gt_pointmap_reshaped = gt_pointmap.permute(0, 3, 1, 2)
+                gt_pointmap_resized = torch.nn.functional.interpolate(
+                    gt_pointmap_reshaped,
+                    size=(H_dec, W_dec),
+                    mode='bilinear',
+                    align_corners=False
+                )
+                # Transpose back to (B, H, W, C)
+                gt_pointmap = gt_pointmap_resized.permute(0, 2, 3, 1)
             
             # Compute loss
             losses = self.loss_fn(pred_pointmap, gt_pointmap)
@@ -320,8 +336,24 @@ class POST3RLightningModule(pl.LightningModule):
         num_frames = frames.shape[1]
         
         for t in range(num_frames):
-            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H, W, 3)
-            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H, W, 3)
+            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
+            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
+            
+            # Resize ground truth to match decoder resolution if needed
+            B, H_dec, W_dec, _ = pred_pointmap.shape
+            _, H_gt, W_gt, _ = gt_pointmap.shape
+            
+            if (H_dec, W_dec) != (H_gt, W_gt):
+                # Transpose to (B, C, H, W) for interpolation
+                gt_pointmap_reshaped = gt_pointmap.permute(0, 3, 1, 2)
+                gt_pointmap_resized = torch.nn.functional.interpolate(
+                    gt_pointmap_reshaped,
+                    size=(H_dec, W_dec),
+                    mode='bilinear',
+                    align_corners=False
+                )
+                # Transpose back to (B, H, W, C)
+                gt_pointmap = gt_pointmap_resized.permute(0, 2, 3, 1)
             
             losses = self.loss_fn(pred_pointmap, gt_pointmap)
             total_loss += losses['total_loss']

@@ -58,10 +58,10 @@ dataset:
   name: "WebdatasetDataModule"
   train_shards: "ytvis-train-{000000..000083}.tar"
   val_shards: "ytvis-validation-{000000..000029}.tar"
-  batch_size: 2
+  batch_size: 48
   val_batch_size: 1
   val_size: 200
-  num_workers: 4
+  num_workers: 8
   num_val_workers: 1
   train_pipeline:
     chunk_size: 4
@@ -90,7 +90,7 @@ trainer:
   log_every_n_steps: 2500
   
   accelerator: "auto"
-  devices: 1
+  devices: 8
   
   precision: "32"
   

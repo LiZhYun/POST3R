@@ -58,7 +58,7 @@ dataset:
   name: "WebdatasetDataModule"
   train_shards: "ytvis-train-{000000..000083}.tar"
   val_shards: "ytvis-validation-{000000..000029}.tar"
-  batch_size: 2
+  batch_size: 20
   val_batch_size: 1
   val_size: 200
   num_workers: 4

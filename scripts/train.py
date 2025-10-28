@@ -110,6 +110,10 @@ def setup_callbacks(args, config, output_path: pathlib.Path):
         lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval="step")
         callbacks.append(lr_monitor)
     
+    # Progress bar with loss metrics
+    progress_bar = pl.callbacks.TQDMProgressBar(refresh_rate=1)
+    callbacks.append(progress_bar)
+    
     # Timeout callback
     if args.timeout:
         timer = pl.callbacks.Timer(

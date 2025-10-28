@@ -307,7 +307,7 @@ class POST3RLightningModule(pl.LightningModule):
                 metric.reset()
         
         # Log all metrics
-        self.log_dict(to_log, on_step=True, on_epoch=False, batch_size=batch_size)
+        self.log_dict(to_log, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=True)
         
         # Delete outputs to save memory (SlotContrast-style)
         del outputs

@@ -13,13 +13,14 @@ class POST3RLoss(nn.Module):
     """
     POST3R Loss Function
     
-    Computes MSE loss between predicted and ground truth 3D pointmaps.
+    Computes MSE loss between predicted and ground truth 3D pointmaps and features.
     Handles resolution mismatches by resizing GT to match prediction.
     """
     
     def __init__(
         self,
-        pointmap_weight: float = 1.0,
+        pointmap_weight: float = 0.5,
+        feature_weight: float = 1.0,
         confidence_weighting: bool = True,
     ):
         """
@@ -27,16 +28,20 @@ class POST3RLoss(nn.Module):
         
         Args:
             pointmap_weight: Weight for pointmap reconstruction loss
+            feature_weight: Weight for feature reconstruction loss
             confidence_weighting: Whether to weight loss by TTT3R confidence
         """
         super().__init__()
         self.pointmap_weight = pointmap_weight
+        self.feature_weight = feature_weight
         self.confidence_weighting = confidence_weighting
     
     def forward(
         self,
         pred_pointmap: torch.Tensor,
         gt_pointmap: torch.Tensor,
+        pred_features: Optional[torch.Tensor] = None,
+        gt_features: Optional[torch.Tensor] = None,
         confidence: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
@@ -45,6 +50,8 @@ class POST3RLoss(nn.Module):
         Args:
             pred_pointmap: Predicted pointmap (B, H_pred, W_pred, 3)
             gt_pointmap: Ground truth pointmap (B, H_gt, W_gt, 3)
+            pred_features: Predicted features (B, H_pred, W_pred, D) - optional
+            gt_features: Ground truth features (B, H_gt, W_gt, D) - optional
             confidence: Optional confidence weights (B, H_gt, W_gt)
             
         Returns:
@@ -104,14 +111,56 @@ class POST3RLoss(nn.Module):
         loss = loss.mean()
         
         # Apply weight
-        loss = self.pointmap_weight * loss
+        pointmap_loss = self.pointmap_weight * loss
         
-        return loss
+        # Compute feature loss if provided
+        feature_loss = 0.0
+        if pred_features is not None and gt_features is not None:
+            B_f, H_pred_f, W_pred_f, D_f = pred_features.shape
+            B_gt_f, H_gt_f, W_gt_f, D_gt_f = gt_features.shape
+            
+            assert D_f == D_gt_f, f"Feature dimension mismatch: {D_f} vs {D_gt_f}"
+            assert B_f == B_gt_f, f"Batch size mismatch: {B_f} vs {B_gt_f}"
+            
+            # Resize GT features to match prediction resolution if needed
+            if (H_pred_f, W_pred_f) != (H_gt_f, W_gt_f):
+                # Permute to (B, D, H, W) for interpolation
+                gt_features_resized = F.interpolate(
+                    gt_features.permute(0, 3, 1, 2),
+                    size=(H_pred_f, W_pred_f),
+                    mode='bilinear',
+                    align_corners=False
+                ).permute(0, 2, 3, 1)  # Back to (B, H, W, D)
+            else:
+                gt_features_resized = gt_features
+            
+            # Compute MSE loss for features
+            feat_loss = F.mse_loss(pred_features, gt_features_resized, reduction='none')
+            # feat_loss shape: (B, H, W, D)
+            
+            # Average over feature dimension
+            feat_loss = feat_loss.mean(dim=-1)  # (B, H, W)
+            
+            # Apply confidence weighting if available (use same as pointmap)
+            if self.confidence_weighting and confidence_resized is not None:
+                feat_loss = feat_loss * confidence_norm
+            
+            # Average over spatial dimensions and batch
+            feat_loss = feat_loss.mean()
+            
+            # Apply weight
+            feature_loss = self.feature_weight * feat_loss
+        
+        # Total loss
+        total_loss = pointmap_loss + feature_loss
+        
+        return total_loss
     
     def __repr__(self):
         return (
             f"POST3RLoss(\n"
             f"  pointmap_weight={self.pointmap_weight},\n"
+            f"  feature_weight={self.feature_weight},\n"
             f"  confidence_weighting={self.confidence_weighting}\n"
             f")"
         )

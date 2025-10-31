@@ -86,6 +86,11 @@ class TTT3RBackbone(nn.Module):
         # Memory state (maintained across frames)
         self.memory_state = None
         
+    @property
+    def rope(self):
+        """Get ROPE instance from TTT3R model for slot attention."""
+        return self.model.rope if hasattr(self.model, 'rope') else None
+        
     def freeze(self):
         """Freeze all model parameters."""
         for param in self.model.parameters():
@@ -95,6 +100,108 @@ class TTT3RBackbone(nn.Module):
     def reset_memory(self):
         """Reset the recurrent memory state."""
         self.memory_state = None
+    
+    def _prepare_views(
+        self,
+        frames: torch.Tensor,
+        reset_interval: int = 1000000,
+    ) -> list:
+        """
+        Prepare views for TTT3R following demo.py prepare_input pattern.
+        
+        This function creates properly formatted view dictionaries that match
+        TTT3R's expected input format, including proper image preprocessing.
+        
+        Args:
+            frames: Input frames (B, T, C, H, W) for sequence or (B, C, H, W) for single frame
+            reset_interval: Reset state every N frames (for very long sequences)
+            
+        Returns:
+            List of view dictionaries in TTT3R format
+        """
+        from dust3r.utils.image import _resize_pil_image, ImgNorm
+        from PIL import Image
+        import numpy as np
+        
+        # Handle single frame vs sequence
+        if frames.ndim == 4:
+            frames = frames.unsqueeze(1)  # (B, C, H, W) -> (B, 1, C, H, W)
+        
+        B, T, C, H_orig, W_orig = frames.shape
+        
+        views = []
+        
+        # Process each frame in the sequence
+        for t in range(T):
+            frame_batch = frames[:, t]  # (B, C, H, W)
+            
+            # Convert to PIL for proper resizing (following TTT3R's load_images)
+            processed_imgs = []
+            true_shapes = []
+            
+            for b in range(B):
+                # Convert tensor to PIL Image
+                img_tensor = frame_batch[b]  # (C, H, W)
+                img_np = ((img_tensor.permute(1, 2, 0).cpu().numpy() + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+                pil_img = Image.fromarray(img_np)
+                
+                # Original size
+                W1, H1 = pil_img.size
+                
+                # Resize following TTT3R's load_images logic
+                if self.input_size == 224:
+                    img = _resize_pil_image(pil_img, round(self.input_size * max(W1 / H1, H1 / W1)))
+                else:
+                    img = _resize_pil_image(pil_img, self.input_size)
+                
+                # Center crop following TTT3R's logic
+                W, H = img.size
+                cx, cy = W // 2, H // 2
+                if self.input_size == 224:
+                    half = min(cx, cy)
+                    img = img.crop((cx - half, cy - half, cx + half, cy + half))
+                else:
+                    halfw, halfh = ((2 * cx) // 16) * 8, ((2 * cy) // 16) * 8
+                    # For non-square images (which is typical for videos)
+                    if W != H:
+                        pass  # Keep as is
+                    img = img.crop((cx - halfw, cy - halfh, cx + halfw, cy + halfh))
+                
+                # Final size after crop
+                W2, H2 = img.size
+                true_shape = np.int32([H2, W2])  # Note: [height, width]
+                
+                # Normalize image following TTT3R's ImgNorm
+                # ImgNorm returns a tensor, and [None] adds batch dimension
+                img_normalized = ImgNorm(img)[None]  # Shape: (1, C, H, W)
+                
+                processed_imgs.append(img_normalized[0])  # Remove batch dim: (C, H, W)
+                true_shapes.append(true_shape)
+            
+            # Stack batch
+            processed_batch = torch.stack(processed_imgs).to(frames.device)  # (B, C, H_new, W_new)
+            true_shape_batch = torch.from_numpy(np.array(true_shapes)).to(frames.device)  # (B, 2)
+            
+            # Create view dict following demo.py format
+            view = {
+                'img': processed_batch,  # (B, C, H_resized, W_resized) - properly resized
+                'img_mask': torch.ones(B, dtype=torch.bool, device=frames.device),
+                'ray_mask': torch.zeros(B, dtype=torch.bool, device=frames.device),
+                'ray_map': torch.full(
+                    (B, 6, processed_batch.shape[-2], processed_batch.shape[-1]),
+                    torch.nan,
+                    device=frames.device
+                ),
+                'true_shape': true_shape_batch.to(torch.int32),  # (B, 2) - [H_final, W_final]
+                'reset': torch.tensor([t == 0 or (t+1) % reset_interval == 0], device=frames.device).repeat(B),
+                'update': torch.ones(B, dtype=torch.bool, device=frames.device),
+                'idx': t,
+                'instance': str(t),
+                'camera_pose': torch.eye(4, dtype=torch.float32, device=frames.device).unsqueeze(0).repeat(B, 1, 1),
+            }
+            views.append(view)
+        
+        return views
         
     def _prepare_input(self, frames: torch.Tensor) -> Dict:
         """
@@ -246,155 +353,102 @@ class TTT3RBackbone(nn.Module):
         return_confidence: bool = True,
         reset_memory: bool = False,
     ) -> Dict[str, torch.Tensor]:
+        """
+        Process a single batch of frames using proper TTT3R preprocessing.
+        """
         if reset_memory:
             self.reset_memory()
-        # Ensure no gradients
+        
         with torch.no_grad():
-            batch_size = frames.shape[0]
-            H, W = frames.shape[-2:]
+            B, C, H_orig, W_orig = frames.shape
             
-            # TTT3R expects 512x512 images - resize if needed
-            if H != self.input_size or W != self.input_size:
-                frames_resized = torch.nn.functional.interpolate(
-                    frames, 
-                    size=(self.input_size, self.input_size),
-                    mode='bilinear',
-                    align_corners=False
-                )
-            else:
-                frames_resized = frames
+            # Use _prepare_views for proper TTT3R preprocessing
+            views = self._prepare_views(frames.unsqueeze(1))  # Add time dimension
+            view = views[0]  # Get the single frame view
             
-            # Prepare view dictionary for TTT3R following demo.py format
-            # TTT3R expects specific keys: img, img_mask, ray_mask, reset, update, true_shape, ray_map
-            # First frame resets state, subsequent frames continue from previous state
-            is_first_frame = self.memory_state is None
-            
-            view = {
-                'img': frames_resized,  # (B, C, H, W) - already resized to 512x512
-                'img_mask': torch.ones(batch_size, dtype=torch.bool, device=frames.device),  # All images are valid
-                'ray_mask': torch.zeros(batch_size, dtype=torch.bool, device=frames.device),  # No ray maps
-                'ray_map': torch.full(
-                    (batch_size, 6, self.input_size, self.input_size),
-                    torch.nan,
-                    device=frames.device
-                ),  # Dummy ray map filled with NaN
-                'true_shape': torch.tensor(
-                    [[self.input_size, self.input_size]], 
-                    device=frames.device
-                ).repeat(batch_size, 1),  # (B, 2) - [H, W]
-                'reset': torch.tensor([is_first_frame], device=frames.device).repeat(batch_size),  # Reset on first frame
-                'update': torch.ones(batch_size, dtype=torch.bool, device=frames.device),  # Always update
-                'idx': 0,  # Frame index (not critical for our use)
-                'instance': '0',  # Instance identifier
-                'camera_pose': torch.eye(4, dtype=torch.float32, device=frames.device).unsqueeze(0).repeat(batch_size, 1, 1),  # Identity pose
-            }
-            
-            # Forward through TTT3R model using forward API
-            # This is the correct API for batched processing (see inference.py)
+            # Forward through TTT3R
             with torch.amp.autocast('cuda', enabled=False):
                 output, state_args = self.model([view], ret_state=True)
                 preds = output.ress
             
-            # Update memory state for next frame
+            # Update memory state
             if state_args:
                 self.memory_state = state_args[-1]
             
-            # Extract prediction for this frame
-            pred = preds[0]  # Get first (and only) prediction
+            # Extract prediction
+            pred = preds[0]
             
-            # Extract encoder features using _encode_image method
-            # This follows the pattern in forward_recurrent (see model.py line 1036-1041)
-            # The features are computed from the image encoder
-            if not hasattr(self.model, '_encode_image'):
-                raise AttributeError(
-                    "TTT3R model does not have '_encode_image' method. "
-                    "Cannot extract encoder features."
-                )
+            # Extract encoder features using the properly preprocessed image
+            processed_img = view['img']  # (B, C, H_resized, W_resized)
+            true_shape = view['true_shape']  # (B, 2)
             
-            # Encode image to get features
-            # _encode_image returns: (img_out, img_pos, _) where:
-            # - img_out: list of feature tensors from different encoder blocks
-            # - img_pos: position embeddings
-            img_out, img_pos, _ = self.model._encode_image(frames_resized, view['true_shape'])
+            img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
             
             # Extract features from the last encoder layer
-            # img_out[-1] has shape (B, N, D) where:
-            # - B: batch size
-            # - N: number of patches (H_patches * W_patches)
-            # - D: feature dimension (enc_embed_dim = 1024)
             feat = img_out[-1]  # (B, N, D)
             N = feat.shape[1]
             
+            # Keep positions from TTT3R's patch_embed (B, N, 2) for ROPE
+            feat_pos = img_pos  # (B, N, 2)
+            
             # Reshape to spatial grid (B, H_f, W_f, D)
-            # For 512x512 images with patch_size=16, we get 32x32 patches
             feat_size = int(N ** 0.5)
-            features = feat.reshape(batch_size, feat_size, feat_size, -1)  # (B, H_f, W_f, D)
+            features = feat.reshape(B, feat_size, feat_size, -1)
             
-            # Extract poses - already in correct format (B, 7) [tx, ty, tz, qx, qy, qz, qw]
+            # Extract poses
             if 'camera_pose' not in pred:
-                raise KeyError(
-                    "TTT3R prediction does not contain 'camera_pose'. "
-                    f"Available keys: {list(pred.keys())}"
-                )
-            
+                raise KeyError(f"No 'camera_pose' in prediction. Keys: {list(pred.keys())}")
             poses = pred['camera_pose']
             
-            # Extract 3D pointmaps (world coordinates)
+            # Extract 3D pointmaps
             if 'pts3d_in_other_view' in pred:
                 pointmaps = pred['pts3d_in_other_view']
             elif 'pts3d' in pred:
-                # Transform to world coordinates using camera pose
                 pointmaps = pred['pts3d']
                 if 'camera_pose' in pred:
-                    # Apply camera pose transformation
                     from dust3r.utils.geometry import geotrf
                     pointmaps = geotrf(pred['camera_pose'], pointmaps)
             else:
-                raise KeyError(
-                    "TTT3R prediction does not contain 'pts3d' or 'pts3d_in_other_view'. "
-                    f"Available keys: {list(pred.keys())}"
-                )
+                raise KeyError(f"No pointmap in prediction. Keys: {list(pred.keys())}")
             
-            # Resize pointmaps back to original frame size if needed
-            if pointmaps.shape[1:3] != (H, W):
-                # pointmaps: (B, H_ttt, W_ttt, 3) -> (B, 3, H_ttt, W_ttt)
-                pointmaps_resized = pointmaps.permute(0, 3, 1, 2)
-                pointmaps_resized = torch.nn.functional.interpolate(
-                    pointmaps_resized,
-                    size=(H, W),
+            # Resize pointmaps to match original input resolution
+            H_pts, W_pts = pointmaps.shape[1:3]
+            if (H_pts, W_pts) != (H_orig, W_orig):
+                pointmaps = torch.nn.functional.interpolate(
+                    pointmaps.permute(0, 3, 1, 2),
+                    size=(H_orig, W_orig),
                     mode='bilinear',
                     align_corners=False
-                )
-                pointmaps = pointmaps_resized.permute(0, 2, 3, 1)  # (B, H, W, 3)
+                ).permute(0, 2, 3, 1)
             
             # Extract confidence scores
             if return_confidence:
                 if 'conf' in pred:
                     confidence = pred['conf']
-                    # Resize if needed
-                    if confidence.shape[1:] != (H, W):
-                        confidence = torch.nn.functional.interpolate(
-                            confidence.unsqueeze(1),  # (B, 1, H_ttt, W_ttt)
-                            size=(H, W),
-                            mode='bilinear',
-                            align_corners=False
-                        ).squeeze(1)  # (B, H, W)
-                elif 'confidence' in pred:
-                    confidence = pred['confidence']
-                    if confidence.shape[1:] != (H, W):
+                    if confidence.shape[1:] != (H_orig, W_orig):
                         confidence = torch.nn.functional.interpolate(
                             confidence.unsqueeze(1),
-                            size=(H, W),
+                            size=(H_orig, W_orig),
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(1)
+                elif 'confidence' in pred:
+                    confidence = pred['confidence']
+                    if confidence.shape[1:] != (H_orig, W_orig):
+                        confidence = torch.nn.functional.interpolate(
+                            confidence.unsqueeze(1),
+                            size=(H_orig, W_orig),
                             mode='bilinear',
                             align_corners=False
                         ).squeeze(1)
                 else:
-                    confidence = torch.ones(batch_size, H, W, device=self.device)
+                    confidence = torch.ones(B, H_orig, W_orig, device=self.device)
             else:
                 confidence = None
             
         return {
             'features': features,
+            'feature_pos': feat_pos,  # (B, N, 2) for ROPE
             'pose': poses,
             'pointmap': pointmaps,
             'confidence': confidence,
@@ -432,82 +486,59 @@ class TTT3RBackbone(nn.Module):
         frames: torch.Tensor,
         return_confidence: bool = True,
     ) -> Dict[str, torch.Tensor]:
+        """
+        Process video sequence using TTT3R's forward() API with list of views.
+        
+        This follows TTT3R's demo.py pattern with proper image preprocessing.
+        Images are resized using TTT3R's _resize_pil_image which handles aspect ratio.
+        """
         with torch.no_grad():
             B, T, C, H, W = frames.shape
             
             # Reset memory at start of sequence
             self.reset_memory()
             
-            # Resize all frames if needed
-            if H != self.input_size or W != self.input_size:
-                frames_resized = torch.nn.functional.interpolate(
-                    frames.view(B * T, C, H, W),
-                    size=(self.input_size, self.input_size),
-                    mode='bilinear',
-                    align_corners=False
-                ).view(B, T, C, self.input_size, self.input_size)
-            else:
-                frames_resized = frames
+            # Prepare views using TTT3R's format (handles resizing properly)
+            views = self._prepare_views(frames)
             
-            # Process frames one by one using recurrent inference
-            # This avoids RoPE position embedding index out of bounds issues
-            preds = []
-            for t in range(T):
-                view = {
-                    'img': frames_resized[:, t],  # (B, C, H, W)
-                    'img_mask': torch.ones(B, dtype=torch.bool, device=frames.device),
-                    'ray_mask': torch.zeros(B, dtype=torch.bool, device=frames.device),
-                    'ray_map': torch.full(
-                        (B, 6, self.input_size, self.input_size),
-                        torch.nan,
-                        device=frames.device
-                    ),
-                    'true_shape': torch.tensor(
-                        [[self.input_size, self.input_size]], 
-                        device=frames.device, dtype=torch.int32
-                    ).repeat(B, 1),
-                    'reset': torch.tensor([t == 0], device=frames.device),
-                    'update': torch.ones(B, dtype=torch.bool, device=frames.device),
-                    'idx': t,
-                    'instance': str(t),
-                    'camera_pose': torch.eye(4, dtype=torch.float32, device=frames.device).unsqueeze(0).repeat(B, 1, 1),
-                }
-                
-                # Process single frame
-                output, state_args = self.model([view], ret_state=True)
-                preds.append(output.ress[0])
-                
-                # Update memory state for next frame
-                if state_args:
-                    self.memory_state = state_args[-1]
+            # Call TTT3R forward with ALL views at once (correct batched API)
+            output, state_args = self.model(views, ret_state=True)
+            preds = output.ress  # List of predictions, one per frame
+            
+            # Update memory state 
+            if state_args:
+                self.memory_state = state_args[-1]
             
             # Extract features and predictions for each frame
             all_features = []
+            all_feature_pos = []
             all_poses = []
             all_pointmaps = []
             all_confidences = [] if return_confidence else None
             
-            true_shape = torch.tensor(
-                [[self.input_size, self.input_size]], 
-                device=frames.device, dtype=torch.int32
-            ).repeat(B, 1)
-            
             for t in range(T):
                 pred = preds[t]
+                view_t = views[t]
                 
-                # Extract encoder features
-                img_out, img_pos, _ = self.model._encode_image(frames_resized[:, t], true_shape)
+                # Extract encoder features using the properly resized image from the view
+                # The view already contains the correctly preprocessed image
+                processed_img = view_t['img']  # (B, C, H_resized, W_resized)
+                true_shape = view_t['true_shape']  # (B, 2)
+                
+                # Encode image to get features
+                img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
                 feat = img_out[-1]  # (B, N, D)
                 N = feat.shape[1]
                 feat_size = int(N ** 0.5)
                 features_t = feat.reshape(B, feat_size, feat_size, -1)
                 all_features.append(features_t)
+                all_feature_pos.append(img_pos)  # (B, N, 2) for ROPE
                 
                 # Extract poses - already in correct format (B, 7) [tx, ty, tz, qx, qy, qz, qw]
                 poses_t = pred['camera_pose']
                 all_poses.append(poses_t)
                 
-                # Extract pointmaps
+                # Extract pointmaps - already at output resolution from TTT3R
                 if 'pts3d_in_other_view' in pred:
                     pointmaps_t = pred['pts3d_in_other_view']
                 elif 'pts3d' in pred:
@@ -518,8 +549,9 @@ class TTT3RBackbone(nn.Module):
                 else:
                     raise KeyError(f"No pointmap in prediction. Keys: {list(pred.keys())}")
                 
-                # Resize if needed
-                if pointmaps_t.shape[1:3] != (H, W):
+                # TTT3R output pointmaps may be at patch resolution, resize to input resolution if needed
+                H_pts, W_pts = pointmaps_t.shape[1:3]
+                if (H_pts, W_pts) != (H, W):
                     pointmaps_t = torch.nn.functional.interpolate(
                         pointmaps_t.permute(0, 3, 1, 2),
                         size=(H, W),
@@ -547,6 +579,7 @@ class TTT3RBackbone(nn.Module):
             # Stack all frames
             result = {
                 'features': torch.stack(all_features, dim=1),  # (B, T, H_f, W_f, D)
+                'feature_pos': torch.stack(all_feature_pos, dim=1),  # (B, T, N, 2) for ROPE
                 'pose': torch.stack(all_poses, dim=1),  # (B, T, 7) [tx, ty, tz, qx, qy, qz, qw]
                 'pointmap': torch.stack(all_pointmaps, dim=1),  # (B, T, H, W, 3)
             }

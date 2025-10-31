@@ -9,10 +9,14 @@ model:
   ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
   
   num_slots: 7
-  slot_dim: 64
+  slot_dim: 128
   num_iterations: 3
 
   decoder_resolution: [128, 128]  # Match input video resolution
+
+  # Loss weights
+  pointmap_weight: 0.5
+  feature_weight: 1.0
 
   learning_rate: 0.0001
   optimizer_type: "adam"
@@ -58,7 +62,7 @@ dataset:
   name: "WebdatasetDataModule"
   train_shards: "ytvis-train-{000000..000083}.tar"
   val_shards: "ytvis-validation-{000000..000029}.tar"
-  batch_size: 2
+  batch_size: 1
   val_batch_size: 1
   val_size: 200
   num_workers: 8

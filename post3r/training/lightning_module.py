@@ -38,6 +38,10 @@ class POST3RLightningModule(pl.LightningModule):
         num_iterations: int = 3,
         decoder_resolution: tuple = (64, 64),
         
+        # Loss config
+        pointmap_weight: float = 0.5,
+        feature_weight: float = 1.0,
+        
         # Optimizer config
         learning_rate: float = 1e-4,
         optimizer_type: str = 'adam',
@@ -69,6 +73,8 @@ class POST3RLightningModule(pl.LightningModule):
             slot_dim: Dimension of each slot
             num_iterations: Number of slot attention iterations
             decoder_resolution: Output resolution for decoder
+            pointmap_weight: Weight for pointmap reconstruction loss
+            feature_weight: Weight for feature reconstruction loss
             learning_rate: Learning rate
             optimizer_type: Optimizer type ('adam', 'adamw')
             weight_decay: Weight decay for optimizer
@@ -96,8 +102,11 @@ class POST3RLightningModule(pl.LightningModule):
             decoder_resolution=decoder_resolution,
         )
         
-        # Create loss function (simple MSE)
-        self.loss_fn = POST3RLoss()
+        # Create loss function with dual loss (pointmap + features)
+        self.loss_fn = POST3RLoss(
+            pointmap_weight=pointmap_weight,
+            feature_weight=feature_weight,
+        )
         
         # Metrics (SlotContrast-style)
         self.train_metrics = nn.ModuleDict(train_metrics) if train_metrics else nn.ModuleDict()
@@ -188,7 +197,8 @@ class POST3RLightningModule(pl.LightningModule):
         B, T, C, H, W = input_frames.shape
         
         # Process decoder masks (B, T, K, H_dec, W_dec) - already spatial
-        decoder_masks = outputs.get('decoder_masks')
+        # Use feature_masks from the feature decoder head as decoder_masks
+        decoder_masks = outputs.get('feature_masks')
         if decoder_masks is not None:
             # Decoder masks are already in spatial format, just need to resize to input size
             # and convert to hard masks
@@ -270,26 +280,18 @@ class POST3RLightningModule(pl.LightningModule):
             # Get predictions and targets for frame t
             pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
             gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
+            pred_features = outputs['recon_features'][:, t]  # (B, H_feat, W_feat, D)
+            gt_features = outputs['gt_features'][:, t]  # (B, H_feat, W_feat, D)
+            confidence = outputs.get('confidence')[:, t] if outputs.get('confidence') is not None else None
             
-            # Resize ground truth to match decoder resolution if needed
-            B, H_dec, W_dec, _ = pred_pointmap.shape
-            _, H_gt, W_gt, _ = gt_pointmap.shape
-            
-            if (H_dec, W_dec) != (H_gt, W_gt):
-                # Transpose to (B, C, H, W) for interpolation
-                gt_pointmap_reshaped = gt_pointmap.permute(0, 3, 1, 2)
-                gt_pointmap_resized = torch.nn.functional.interpolate(
-                    gt_pointmap_reshaped,
-                    size=(H_dec, W_dec),
-                    mode='bilinear',
-                    align_corners=False
-                )
-                # Transpose back to (B, H, W, C)
-                gt_pointmap = gt_pointmap_resized.permute(0, 2, 3, 1)
-            
-            # Compute loss
-            losses = self.loss_fn(pred_pointmap, gt_pointmap)
-            total_loss += losses['total_loss']
+            # Compute combined loss (pointmap + features)
+            loss_dict = self.loss_fn(
+                pred_pointmap=pred_pointmap,
+                gt_pointmap=gt_pointmap,
+                pred_features=pred_features,
+                gt_features=gt_features,
+            )
+            total_loss += loss_dict['loss']
         
         # Average over frames
         total_loss = total_loss / num_frames
@@ -338,25 +340,18 @@ class POST3RLightningModule(pl.LightningModule):
         for t in range(num_frames):
             pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
             gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
+            pred_features = outputs['recon_features'][:, t]  # (B, H_feat, W_feat, D)
+            gt_features = outputs['gt_features'][:, t]  # (B, H_feat, W_feat, D)
+            confidence = outputs.get('confidence')[:, t] if outputs.get('confidence') is not None else None
             
-            # Resize ground truth to match decoder resolution if needed
-            B, H_dec, W_dec, _ = pred_pointmap.shape
-            _, H_gt, W_gt, _ = gt_pointmap.shape
-            
-            if (H_dec, W_dec) != (H_gt, W_gt):
-                # Transpose to (B, C, H, W) for interpolation
-                gt_pointmap_reshaped = gt_pointmap.permute(0, 3, 1, 2)
-                gt_pointmap_resized = torch.nn.functional.interpolate(
-                    gt_pointmap_reshaped,
-                    size=(H_dec, W_dec),
-                    mode='bilinear',
-                    align_corners=False
-                )
-                # Transpose back to (B, H, W, C)
-                gt_pointmap = gt_pointmap_resized.permute(0, 2, 3, 1)
-            
-            losses = self.loss_fn(pred_pointmap, gt_pointmap)
-            total_loss += losses['total_loss']
+            # Compute combined loss (pointmap + features)
+            loss_dict = self.loss_fn(
+                pred_pointmap=pred_pointmap,
+                gt_pointmap=gt_pointmap,
+                pred_features=pred_features,
+                gt_features=gt_features,
+            )
+            total_loss += loss_dict['loss']
         
         total_loss = total_loss / num_frames
         

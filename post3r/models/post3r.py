@@ -4,7 +4,12 @@ POST3R: Object-Centric 3D Reconstruction with Slot Attention
 This is the main model that integrates:
 1. TTT3R Backbone (frozen) - extracts features, poses, and 3D pointmaps
 2. Recurrent Slot Attention - decomposes scene into object slots
-3. 3D Decoder - reconstructs 3D pointmap from slots
+3. 3D Decoder - reconstructs 3D pointmap fr            'gt_features': features,  # (B, T, H_feat, W_feat, D_feat)
+            'poses': poses,  # (B, T, 7) [tx, ty, tz, qx, qy, qz, qw]
+            'grouping_masks': torch.stack(all_grouping_masks, dim=1) if all_grouping_masks[0] is not None else None,  # (B, T, K, N)
+            'pointmap_masks': torch.stack(all_pointmap_masks, dim=1),  # (B, T, K, H, W) - always present now
+            'feature_masks': torch.stack(all_feature_masks, dim=1),  # (B, T, K, H, W)
+            'confidence': confidence,  # (B, T, H, W) if availablets
 """
 
 import torch
@@ -13,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .backbone import TTT3RBackbone
 from .slot_attention import RecurrentSlotAttention
-from .decoder_3d import Decoder3D
+from .decoder_3d import POST3RDecoder
 
 
 class POST3R(nn.Module):
@@ -37,10 +42,9 @@ class POST3R(nn.Module):
         slot_dim: int = 128,
         num_iterations: int = 3,
         mlp_hidden_dim: int = 256,
-        use_ttt3r_update: bool = True,
         
         # Decoder config
-        decoder_resolution: Tuple[int, int] = (64, 64),
+        decoder_resolution: Tuple[int, int] = (512, 512),  # Default output resolution
         decoder_hidden_dims: Tuple[int, ...] = (256, 256, 128),
         
         # Feature projection
@@ -56,8 +60,7 @@ class POST3R(nn.Module):
             slot_dim: Dimension of each slot
             num_iterations: Number of slot attention iterations
             mlp_hidden_dim: Hidden dimension for slot attention MLP
-            use_ttt3r_update: Use TTT3R-style confidence weighting
-            decoder_resolution: Output resolution for decoder
+            decoder_resolution: Output resolution for decoder (default: 512x512)
             decoder_hidden_dims: Hidden dimensions for decoder CNN
             feature_dim: Dimension of TTT3R features
         """
@@ -74,24 +77,27 @@ class POST3R(nn.Module):
             frozen=freeze_backbone
         )
         
-        # 2. Recurrent Slot Attention
-        # Let SlotAttention handle feature projection internally (1024 → 128)
-        # This is cleaner and avoids redundant projections
+        # 2. Recurrent Slot Attention (TTT3R-style)
+        # Follows TTT3R pattern: register_tokens, _encode_state, _decoder, model_update_type="ttt3r"
+        # Now with ROPE support from TTT3R
         self.slot_attention = RecurrentSlotAttention(
             num_slots=num_slots,
             feature_dim=feature_dim,  # 1024 (TTT3R encoder output)
             slot_dim=slot_dim,         # 128 (desired slot dimension)
             num_iterations=num_iterations,
             mlp_hidden_dim=mlp_hidden_dim,
-            use_ttt3r_update=use_ttt3r_update
+            model_update_type="ttt3r",  # TTT3R-style confidence-weighted updates
+            rope=self.backbone.rope,    # Use TTT3R's ROPE for attention
+            slot_pos_type="2d"          # 2D grid positions for slots
         )
         
         # 4. 3D Decoder
-        self.decoder = Decoder3D(
+        # Dual-head decoder: pointmap head + feature head
+        self.decoder = POST3RDecoder(
             slot_dim=slot_dim,
-            resolution=decoder_resolution,
-            hidden_dims=decoder_hidden_dims,
-            output_type='pointmap'
+            feature_dim=feature_dim,  # 1024 for TTT3R encoder output
+            pointmap_resolution=decoder_resolution,
+            pointmap_hidden_dims=decoder_hidden_dims,
         )
         
         # Memory for recurrent processing
@@ -130,6 +136,7 @@ class POST3R(nn.Module):
         backbone_output = self.backbone(images)
         
         features = backbone_output['features']  # (B, H_feat, W_feat, D_feat)
+        feature_pos = backbone_output['feature_pos']  # (B, N, 2) for ROPE
         pose = backbone_output['pose']  # (B, 7) [tx, ty, tz, qx, qy, qz, qw]
         gt_pointmap = backbone_output['pointmap']  # (B, H, W, 3)
         confidence = backbone_output.get('confidence', None)
@@ -140,36 +147,51 @@ class POST3R(nn.Module):
         # Shape: (B, H_feat, W_feat, D_feat) → (B, N, D_feat) where N = H_feat * W_feat
         features_flat = features.view(B, H_feat * W_feat, D_feat)  # (B, N, 1024)
         
-        # 3. Slot attention decomposition
+        # 3. Slot attention decomposition with ROPE
         # SlotAttention will handle projection from 1024 → 128 internally
+        # feature_pos is (B, N, 2) from TTT3R's patch_embed.position_getter
         slots_output = self.slot_attention(
             features_flat,
+            feature_pos=feature_pos,  # Pass positions for ROPE
             prev_slots=self.prev_slots,
             confidence=confidence
         )
         
         slots = slots_output['slots']  # (B, K, D_slot)
+        slot_pos = slots_output['slot_pos']  # (B, K, 2) slot positions for ROPE
         attn_weights = slots_output.get('attn_weights', None)
         grouping_masks = slots_output.get('masks', None)  # (B, K, N) - attention masks
         
         # Update memory
         self.prev_slots = slots.detach()
         
-        # 4. Decode slots to 3D pointmap
-        decoder_output = self.decoder(slots, pose)
+        # Get target size for pointmap (use GT pointmap size)
+        _, H_gt, W_gt, _ = gt_pointmap.shape
+        
+        # 4. Decode slots to 3D pointmap and features
+        decoder_output = self.decoder(
+            slots, 
+            pose,
+            feature_target_shape=(H_feat, W_feat),  # Match encoder feature resolution
+            pointmap_target_size=(H_gt, W_gt)  # Match GT pointmap size
+        )
         recon_pointmap = decoder_output['pointmap']  # (B, H_out, W_out, 3)
-        decoder_masks = decoder_output['masks']  # (B, K, H_out, W_out) - decoder masks
+        recon_features = decoder_output['features']  # (B, H_feat, W_feat, D_feat)
+        pointmap_masks = decoder_output['pointmap_masks']  # (B, K, H_out, W_out) - upsampled from feature masks if DPT
+        feature_masks = decoder_output['feature_masks']  # (B, K, H_feat, W_feat)
         
         return {
             'slots': slots,
             'recon_pointmap': recon_pointmap,
+            'recon_features': recon_features,
             'gt_pointmap': gt_pointmap,
+            'gt_features': features,
             'pose': pose,
-            'features': features,
             'confidence': confidence,
             'attn_weights': attn_weights,
             'grouping_masks': grouping_masks,  # (B, K, N) - from slot attention
-            'decoder_masks': decoder_masks,  # (B, K, H, W) - from decoder
+            'pointmap_masks': pointmap_masks,  # (B, K, H, W) - from pointmap decoder
+            'feature_masks': feature_masks,  # (B, K, H, W) - from feature decoder
         }
     
     def forward_sequence(
@@ -200,9 +222,10 @@ class POST3R(nn.Module):
         # 1. Process ENTIRE sequence through TTT3R in one call (CORRECT)
         # This is much more efficient and how TTT3R is designed to work
         backbone_output = self.backbone.forward_sequence(images)
-        
+
         # Extract outputs: all have shape (B, T, ...)
         features = backbone_output['features']  # (B, T, H_feat, W_feat, D_feat)
+        feature_pos = backbone_output['feature_pos']  # (B, T, N, 2) for ROPE
         poses = backbone_output['pose']  # (B, T, 7) [tx, ty, tz, qx, qy, qz, qw]
         gt_pointmaps = backbone_output['pointmap']  # (B, T, H, W, 3)
         confidence = backbone_output.get('confidence', None)  # (B, T, H, W) or None
@@ -211,12 +234,15 @@ class POST3R(nn.Module):
         # Note: Slot attention is recurrent, so we still need frame-by-frame processing
         all_slots = []
         all_recon_pointmaps = []
+        all_recon_features = []
         all_grouping_masks = []
-        all_decoder_masks = []
+        all_pointmap_masks = []
+        all_feature_masks = []
         
         for t in range(T):
             # Extract features for this timestep
             features_t = features[:, t]  # (B, H_feat, W_feat, D_feat)
+            feature_pos_t = feature_pos[:, t]  # (B, N, 2) for ROPE
             pose_t = poses[:, t]  # (B, 7) [tx, ty, tz, qx, qy, qz, qw]
             confidence_t = confidence[:, t] if confidence is not None else None  # (B, H, W)
             
@@ -225,9 +251,10 @@ class POST3R(nn.Module):
             # Flatten features
             features_flat = features_t.view(B_t, H_feat * W_feat, D_feat)  # (B, N, 1024)
             
-            # Slot attention decomposition
+            # Slot attention decomposition with ROPE
             slots_output = self.slot_attention(
                 features_flat,
+                feature_pos=feature_pos_t,  # Pass positions for ROPE
                 prev_slots=self.prev_slots,
                 confidence=confidence_t
             )
@@ -238,24 +265,36 @@ class POST3R(nn.Module):
             # Update memory
             self.prev_slots = slots_t.detach()
             
-            # Decode slots to 3D pointmap
-            decoder_output_t = self.decoder(slots_t, pose_t)
+            # Decode slots to 3D pointmap and features
+            decoder_output_t = self.decoder(
+                slots_t, 
+                pose_t,
+                feature_target_shape=(H_feat, W_feat)
+            )
             recon_pointmap_t = decoder_output_t['pointmap']  # (B, H_out, W_out, 3)
-            decoder_masks_t = decoder_output_t['masks']  # (B, K, H_out, W_out)
+            recon_features_t = decoder_output_t['features']  # (B, H_feat, W_feat, D_feat)
+            pointmap_masks_t = decoder_output_t['pointmap_masks']  # (B, K, H_out, W_out) - upsampled from feature masks if DPT
+            feature_masks_t = decoder_output_t['feature_masks']  # (B, K, H_feat, W_feat)
             
             all_slots.append(slots_t)
             all_recon_pointmaps.append(recon_pointmap_t)
+            all_recon_features.append(recon_features_t)
             all_grouping_masks.append(grouping_masks_t)
-            all_decoder_masks.append(decoder_masks_t)
+            all_pointmap_masks.append(pointmap_masks_t)
+            all_feature_masks.append(feature_masks_t)
         
         # Stack along time dimension
         return {
             'slots': torch.stack(all_slots, dim=1),  # (B, T, K, D)
             'recon_pointmap': torch.stack(all_recon_pointmaps, dim=1),  # (B, T, H_out, W_out, 3)
+            'recon_features': torch.stack(all_recon_features, dim=1),  # (B, T, H_feat, W_feat, D_feat)
             'gt_pointmap': gt_pointmaps,  # (B, T, H, W, 3) - already stacked from backbone
+            'gt_features': features,  # (B, T, H_feat, W_feat, D_feat)
             'poses': poses,  # (B, T, 7) [tx, ty, tz, qx, qy, qz, qw]
             'grouping_masks': torch.stack(all_grouping_masks, dim=1) if all_grouping_masks[0] is not None else None,  # (B, T, K, N)
-            'decoder_masks': torch.stack(all_decoder_masks, dim=1),  # (B, T, K, H, W)
+            'pointmap_masks': torch.stack(all_pointmap_masks, dim=1) if all_pointmap_masks[0] is not None else None,  # (B, T, K, H, W) - may not exist for DPT
+            'feature_masks': torch.stack(all_feature_masks, dim=1),  # (B, T, K, H, W)
+            'confidence': confidence,  # (B, T, H, W) if available
         }
     
     def get_slot_decomposition(
@@ -282,8 +321,8 @@ class POST3R(nn.Module):
         pose = output['pose']
         attn_weights = output.get('attn_weights', None)
         
-        # Get per-slot pointmaps and masks
-        slot_pointmaps, slot_masks = self.decoder.get_slot_pointmaps(slots, pose)
+        # Get per-slot pointmaps and masks (using pointmap head's method)
+        slot_pointmaps, slot_masks = self.decoder.pointmap_head.get_slot_pointmaps(slots, pose)
         
         # Reshape attention weights to spatial
         if attn_weights is not None:
@@ -343,7 +382,7 @@ def test_post3r():
         ttt3r_checkpoint=checkpoint_path,
         num_slots=8,
         slot_dim=128,
-        decoder_resolution=(64, 64)
+        decoder_resolution=(512, 512)
     )
     
     print(f"\n{model}")

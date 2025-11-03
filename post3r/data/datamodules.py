@@ -316,7 +316,7 @@ class WebdatasetDataModule(pl.LightningDataModule):
                 shards, resampled=True, cache_dir=cache_dir, cache_size=cache_size
             )
             #Add large shuffle buffer to reduce shard thrashing
-            dataset = dataset.shuffle(5000)  # Buffer 5000 samples (was ~100 by default)
+            # dataset = dataset.shuffle(5000)  # Buffer 5000 samples (was ~100 by default)
         else:
             splitter = (
                 wds.shardlists.split_by_node

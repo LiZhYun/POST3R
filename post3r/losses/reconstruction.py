@@ -31,12 +31,28 @@ class PointmapReconstructionLoss(nn.Module):
         self.pointmap_weight = pointmap_weight
         self.feature_weight = feature_weight
     
+    def _compute_norm(self, pointmap: torch.Tensor) -> torch.Tensor:
+        """
+        Compute normalization factor as average distance to origin (Eq. 3).
+        
+        Args:
+            pointmap: (B, H, W, 3)
+            
+        Returns:
+            norm: (B,) - average L2 norm per batch
+        """
+        B, H, W, _ = pointmap.shape
+        norms = torch.norm(pointmap, p=2, dim=-1)  # (B, H, W)
+        avg_norm = norms.view(B, -1).mean(dim=1)  # (B,)
+        return avg_norm
+    
     def forward(
         self,
         pred_pointmap: torch.Tensor,
         gt_pointmap: torch.Tensor,
         pred_features: Optional[torch.Tensor] = None,
         gt_features: Optional[torch.Tensor] = None,
+        confidence: Optional[torch.Tensor] = None,
     ) -> dict:
         """
         Compute reconstruction loss.
@@ -46,6 +62,7 @@ class PointmapReconstructionLoss(nn.Module):
             gt_pointmap: Ground truth pointmap (B, H_gt, W_gt, 3)
             pred_features: Predicted features (B, H_pred, W_pred, D) - optional
             gt_features: Ground truth features (B, H_gt, W_gt, D) - optional
+            confidence: Confidence scores from TTT3R (B, H_gt, W_gt) - optional
             
         Returns:
             Dictionary with loss components
@@ -56,24 +73,34 @@ class PointmapReconstructionLoss(nn.Module):
         assert C == 3 and C_gt == 3, "Pointmaps must have 3 channels (XYZ)"
         assert B == B_gt, f"Batch size mismatch: {B} vs {B_gt}"
         
-        # Resize GT pointmap to match prediction resolution if needed
+        # Resize predicted pointmap to match GT resolution if needed
         if (H_pred, W_pred) != (H_gt, W_gt):
-            # Permute to (B, C, H, W) for interpolation
-            gt_pointmap_resized = F.interpolate(
-                gt_pointmap.permute(0, 3, 1, 2),
-                size=(H_pred, W_pred),
+            pred_pointmap_resized = F.interpolate(
+                pred_pointmap.permute(0, 3, 1, 2),
+                size=(H_gt, W_gt),
                 mode='bilinear',
                 align_corners=False
-            ).permute(0, 2, 3, 1)  # Back to (B, H, W, C)
+            ).permute(0, 2, 3, 1)
         else:
-            gt_pointmap_resized = gt_pointmap
+            pred_pointmap_resized = pred_pointmap
         
-        # Compute pointmap MSE loss
-        pointmap_loss = F.mse_loss(pred_pointmap, gt_pointmap_resized, reduction='none')
-        # pointmap_loss shape: (B, H, W, 3)
+        # Normalize pointmaps by average distance to origin (Eq. 3)
+        pred_norm = self._compute_norm(pred_pointmap_resized)
+        gt_norm = self._compute_norm(gt_pointmap)
         
-        # Average over XYZ channels
-        pointmap_loss = pointmap_loss.mean(dim=-1)  # (B, H, W)
+        pred_pointmap_normalized = pred_pointmap_resized / (pred_norm.view(B, 1, 1, 1) + 1e-8)
+        gt_pointmap_normalized = gt_pointmap / (gt_norm.view(B, 1, 1, 1) + 1e-8)
+        
+        # Compute per-pixel regression loss (Euclidean distance, Eq. 2)
+        pointmap_loss = torch.norm(
+            pred_pointmap_normalized - gt_pointmap_normalized, 
+            p=2, 
+            dim=-1
+        )  # (B, H_gt, W_gt)
+        
+        # Apply confidence weighting (Eq. 4, without the log term)
+        if confidence is not None:
+            pointmap_loss = pointmap_loss * confidence
         
         # Average over spatial dimensions and batch
         pointmap_loss = pointmap_loss.mean()
@@ -87,24 +114,20 @@ class PointmapReconstructionLoss(nn.Module):
             assert D_f == D_f_gt, f"Feature dimension mismatch: {D_f} vs {D_f_gt}"
             assert B_f == B_f_gt, f"Batch size mismatch: {B_f} vs {B_f_gt}"
             
-            # Resize GT features to match prediction resolution if needed
+            # Resize predicted features to match GT resolution if needed
             if (H_f_pred, W_f_pred) != (H_f_gt, W_f_gt):
-                gt_features_resized = F.interpolate(
-                    gt_features.permute(0, 3, 1, 2),
-                    size=(H_f_pred, W_f_pred),
+                pred_features_resized = F.interpolate(
+                    pred_features.permute(0, 3, 1, 2),
+                    size=(H_f_gt, W_f_gt),
                     mode='bilinear',
                     align_corners=False
                 ).permute(0, 2, 3, 1)
             else:
-                gt_features_resized = gt_features
+                pred_features_resized = pred_features
             
             # Compute feature MSE loss
-            feature_loss = F.mse_loss(pred_features, gt_features_resized, reduction='none')
-            # feature_loss shape: (B, H_f, W_f, D)
-            
-            # Average over feature dimension
-            feature_loss = feature_loss.mean(dim=-1)  # (B, H_f, W_f)
-            
+            feature_loss = F.mse_loss(pred_features_resized, gt_features, reduction='none')
+            feature_loss = feature_loss.mean(dim=-1)  # (B, H_f_gt, W_f_gt)
             # Average over spatial dimensions and batch
             feature_loss = feature_loss.mean()
         

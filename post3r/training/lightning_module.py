@@ -290,6 +290,7 @@ class POST3RLightningModule(pl.LightningModule):
                 gt_pointmap=gt_pointmap,
                 pred_features=pred_features,
                 gt_features=gt_features,
+                confidence=confidence,
             )
             total_loss += loss_dict['loss']
         
@@ -350,6 +351,7 @@ class POST3RLightningModule(pl.LightningModule):
                 gt_pointmap=gt_pointmap,
                 pred_features=pred_features,
                 gt_features=gt_features,
+                confidence=confidence,
             )
             total_loss += loss_dict['loss']
         

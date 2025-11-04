@@ -15,7 +15,7 @@ model:
   decoder_resolution: [128, 128]  # Match input video resolution
 
   # Loss weights
-  pointmap_weight: 0.5
+  pointmap_weight: 1.0
   feature_weight: 1.0
 
   learning_rate: 0.0001

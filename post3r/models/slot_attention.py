@@ -37,9 +37,9 @@ import math
 import sys
 import os
 
-# Import TTT3R's Attention and CrossAttention blocks
+# Import TTT3R's DecoderBlock
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../submodules/ttt3r/src'))
-from dust3r.blocks import Attention, CrossAttention
+from dust3r.blocks import DecoderBlock
 
 
 class RecurrentSlotAttention(nn.Module):
@@ -97,37 +97,36 @@ class RecurrentSlotAttention(nn.Module):
         # TTT3R-style: register_tokens for slot initialization
         self.register_tokens = nn.Embedding(num_slots, slot_dim)
         
-        # Layer normalization
+        # Layer normalization for input features
         self.norm_inputs = nn.LayerNorm(feature_dim)
-        self.norm_slots = nn.LayerNorm(slot_dim)
-        self.norm_mlp = nn.LayerNorm(slot_dim)
         
-        # Use TTT3R's CrossAttention for slot-to-feature attention with ROPE
+        # ROPE from TTT3R
         self.rope = rope.float() if rope is not None else None
-        self.cross_attn = CrossAttention(
-            dim=slot_dim,
-            rope=self.rope,
-            num_heads=slot_dim // 64,  # Follow TTT3R's convention
-            qkv_bias=True,
-            attn_drop=0.0,
-            proj_drop=0.0
-        )
         
-        # Project features to slot_dim if needed
+        # Project features to slot_dim if needed (before feeding to DecoderBlock)
         if feature_dim != slot_dim:
             self.feature_proj = nn.Linear(feature_dim, slot_dim)
         else:
             self.feature_proj = nn.Identity()
         
-        # GRU for slot updates
-        self.gru = nn.GRUCell(slot_dim, slot_dim)
-        
-        # MLP for slot refinement
-        self.mlp = nn.Sequential(
-            nn.Linear(slot_dim, mlp_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(mlp_hidden_dim, slot_dim)
-        )
+        # Use TTT3R's DecoderBlock for slot attention iterations
+        # Each iteration is a full DecoderBlock: self-attn + cross-attn + MLP
+        self.slot_decoder_blocks = nn.ModuleList([
+            DecoderBlock(
+                dim=slot_dim,
+                num_heads=slot_dim // 64,  # Follow TTT3R's convention
+                mlp_ratio=4.0,
+                qkv_bias=True,
+                drop=0.0,
+                attn_drop=0.0,
+                drop_path=0.0,
+                act_layer=nn.GELU,
+                norm_layer=nn.LayerNorm,
+                norm_mem=True,  # Normalize memory (features)
+                rope=self.rope,
+            )
+            for _ in range(num_iterations)
+        ])
     
     def _encode_state(self, batch_size: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -172,101 +171,47 @@ class RecurrentSlotAttention(nn.Module):
         
         return slots, slot_pos
     
-    def _compute_attention(
-        self, 
-        slots: torch.Tensor,
-        slot_pos: torch.Tensor,
-        features: torch.Tensor,
-        feature_pos: torch.Tensor,
-        return_attn: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """
-        Compute attention using TTT3R's CrossAttention with ROPE.
-        
-        Args:
-            slots: Slot representations (B, K, D_slot)
-            slot_pos: Slot positions for ROPE (B, K, 2)
-            features: Input features (B, N, D_feat)
-            feature_pos: Feature positions for ROPE (B, N, 2)
-            return_attn: Whether to return attention maps
-            
-        Returns:
-            updates: Aggregated features (B, K, D_slot)
-            attn_map: Cross-attention map if return_attn=True, else None
-        """
-        B, K, _ = slots.shape
-        _, N, _ = features.shape
-        
-        # Normalize
-        slots_norm = self.norm_slots(slots)
-        features_norm = self.norm_inputs(features)
-        
-        # Project features to slot_dim if needed
-        features_proj = self.feature_proj(features_norm)  # (B, N, D_slot)
-        
-        # Use TTT3R's CrossAttention with ROPE
-        # query=slots, key=features, value=features, qpos=slot_pos, kpos=feature_pos
-        if return_attn:
-            updates, attn_map = self.cross_attn(
-                query=slots_norm,
-                key=features_proj,
-                value=features_proj,
-                qpos=slot_pos,
-                kpos=feature_pos,
-                return_attn=True
-            )  # updates: (B, K, D_slot), attn_map: (B, num_heads, K, N)
-            return updates, attn_map
-        else:
-            updates = self.cross_attn(
-                query=slots_norm,
-                key=features_proj,
-                value=features_proj,
-                qpos=slot_pos,
-                kpos=feature_pos,
-                return_attn=False
-            )  # (B, K, D_slot)
-            return updates, None
-    
     def _slot_attention_iteration(
         self,
         slots: torch.Tensor,
         slot_pos: torch.Tensor,
         features: torch.Tensor,
         feature_pos: torch.Tensor,
+        block: DecoderBlock,
         return_attn: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        Single iteration of slot attention with ROPE.
+        Single iteration of slot attention using TTT3R's DecoderBlock.
+        
+        TTT3R DecoderBlock does:
+        1. Self-attention on slots (x) with residual
+        2. Cross-attention from slots (x) to features (y) with residual
+        3. MLP with residual
         
         Args:
             slots: Current slot states (B, K, D_slot)
             slot_pos: Slot positions for ROPE (B, K, 2)
             features: Input features (B, N, D_feat)
             feature_pos: Feature positions for ROPE (B, N, 2)
+            block: DecoderBlock to use for this iteration
             return_attn: Whether to return attention maps
             
         Returns:
             updated_slots: Updated slot states (B, K, D_slot)
-            attn_map: Cross-attention map if return_attn=True (B, H, K, N)
+            self_attn_map: Self-attention map if return_attn=True (B, H, K, K)
+            cross_attn_map: Cross-attention map if return_attn=True (B, H, K, N)
         """
-        B, K, D_slot = slots.shape
+        # Normalize and project features
+        features_norm = self.norm_inputs(features)
+        features_proj = self.feature_proj(features_norm)  # (B, N, D_slot)
         
-        # Compute attention using TTT3R's CrossAttention with ROPE
-        updates, attn_map = self._compute_attention(
-            slots, slot_pos, features, feature_pos, return_attn=return_attn
+        # Call DecoderBlock: forward(x, y, xpos, ypos, return_attn)
+        # x=slots, y=features, xpos=slot_pos, ypos=feature_pos
+        updated_slots, _, self_attn_map, cross_attn_map = block(
+            slots, features_proj, slot_pos, feature_pos, return_attn=return_attn
         )
         
-        # Update slots using GRU
-        slots_flat = slots.view(B * K, D_slot)
-        updates_flat = updates.view(B * K, D_slot)
-        
-        slots_updated = self.gru(updates_flat, slots_flat)
-        slots_updated = slots_updated.view(B, K, D_slot)
-        
-        # Apply MLP
-        slots_refined = slots_updated + self.mlp(self.norm_mlp(slots_updated))
-        
-        return slots_refined, attn_map
+        return updated_slots, self_attn_map, cross_attn_map
     
     def _decoder(
         self,
@@ -306,19 +251,22 @@ class RecurrentSlotAttention(nn.Module):
             final_attn_map: Final attention map (B, H, K, N) or None
             slot_confidence: Per-slot confidence (B, K) if using TTT3R update
         """
-        # Iterative attention refinement with ROPE
+        # Iterative attention refinement with ROPE using DecoderBlocks
         # Collect cross-attention maps from all iterations (like TTT3R's decoder blocks)
         current_slots = slots
         cross_attn_maps = []
         final_attn_map = None
         
-        for i in range(self.num_iterations):
-            
-            current_slots, attn_map = self._slot_attention_iteration(
-                current_slots, slot_pos, features, feature_pos, return_attn=True
+        for i, block in enumerate(self.slot_decoder_blocks):
+            # Each DecoderBlock performs: self-attn + cross-attn + MLP
+            current_slots, self_attn_map, cross_attn_map = self._slot_attention_iteration(
+                current_slots, slot_pos, features, feature_pos, block, return_attn=True
             )
-            cross_attn_maps.append(attn_map)  # (B, H, K, N)
-            final_attn_map = attn_map  # Keep last iteration's attention map
+            
+            # Collect cross-attention maps for TTT3R-style confidence computation
+            if cross_attn_map is not None:
+                cross_attn_maps.append(cross_attn_map)  # (B, H, K, N)
+                final_attn_map = cross_attn_map  # Keep last iteration's attention map
         
         # TTT3R-style confidence-weighted update with previous slots
         slot_confidence = None

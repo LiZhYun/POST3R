@@ -581,45 +581,45 @@ class DPTPointmapHead(nn.Module):
         # Pose embedding and modulation (following DPTPts3dPose)
         self.pose_embedding = PoseEmbedding(pose_dim, dec_embed_dim)
         
-        # Import DPT components from TTT3R
-        # We'll create a simplified DPT adapter
-        try:
-            import sys
-            from pathlib import Path
-            TTT3R_PATH = Path(__file__).parent.parent.parent / "submodules" / "ttt3r" / "src"
-            if str(TTT3R_PATH) not in sys.path:
-                sys.path.insert(0, str(TTT3R_PATH))
+        # # Import DPT components from TTT3R
+        # # We'll create a simplified DPT adapter
+        # try:
+        import sys
+        from pathlib import Path
+        TTT3R_PATH = Path(__file__).parent.parent.parent / "submodules" / "ttt3r" / "src"
+        if str(TTT3R_PATH) not in sys.path:
+            sys.path.insert(0, str(TTT3R_PATH))
+        
+        from models.dpt_block import DPTOutputAdapter
+        
+        # DPT output adapter configuration
+        hooks_idx = [0, 1, 2, 3]  # Multi-scale hooks
+        dim_tokens = [dec_embed_dim] * 4  # Same dim for all scales
+        
+        dpt_args = dict(
+            output_width_ratio=1,
+            num_channels=output_channels,
+            feature_dim=feature_dim,
+            last_dim=last_dim,
+            hooks=hooks_idx,
+            head_type="regression",
+        )
+        
+        self.dpt = DPTOutputAdapter(**dpt_args)
+        self.dpt.init(dim_tokens_enc=dim_tokens)
+        self.has_dpt = True
             
-            from models.dpt_block import DPTOutputAdapter
+        # except Exception as e:
+        #     print(f"Warning: Could not load DPT components: {e}")
+        #     print("Falling back to simple CNN decoder")
+        #     self.has_dpt = False
             
-            # DPT output adapter configuration
-            hooks_idx = [0, 1, 2, 3]  # Multi-scale hooks
-            dim_tokens = [dec_embed_dim] * 4  # Same dim for all scales
-            
-            dpt_args = dict(
-                output_width_ratio=1,
-                num_channels=output_channels,
-                feature_dim=feature_dim,
-                last_dim=last_dim,
-                hooks=hooks_idx,
-                head_type="regression",
-            )
-            
-            self.dpt = DPTOutputAdapter(**dpt_args)
-            self.dpt.init(dim_tokens_enc=dim_tokens)
-            self.has_dpt = True
-            
-        except Exception as e:
-            print(f"Warning: Could not load DPT components: {e}")
-            print("Falling back to simple CNN decoder")
-            self.has_dpt = False
-            
-            # Fallback: simple CNN decoder
-            self.fallback_decoder = nn.Sequential(
-                nn.Linear(slot_dim, 256),
-                nn.ReLU(inplace=True),
-                nn.Linear(256, spatial_size[0] * spatial_size[1] * output_channels),
-            )
+        #     # Fallback: simple CNN decoder
+        #     self.fallback_decoder = nn.Sequential(
+        #         nn.Linear(slot_dim, 256),
+        #         nn.ReLU(inplace=True),
+        #         nn.Linear(256, spatial_size[0] * spatial_size[1] * output_channels),
+        #     )
     
     def forward(
         self,

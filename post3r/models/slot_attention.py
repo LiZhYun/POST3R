@@ -128,10 +128,6 @@ class RecurrentSlotAttention(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(mlp_hidden_dim, slot_dim)
         )
-        
-        # For TTT3R-style confidence-weighted updates
-        if model_update_type == "ttt3r":
-            self.confidence_proj = nn.Linear(slot_dim, 1)
     
     def _encode_state(self, batch_size: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -150,8 +146,8 @@ class RecurrentSlotAttention(nn.Module):
         slots = self.register_tokens(slot_indices)  # (num_slots, slot_dim)
         slots = slots.unsqueeze(0).expand(batch_size, -1, -1)  # (B, num_slots, slot_dim)
         
-        # Add small noise for diversity
-        slots = slots + torch.randn_like(slots) * 0.01
+        # # Add small noise for diversity
+        # slots = slots + torch.randn_like(slots) * 0.01
         
         # Generate slot_pos for ROPE (following TTT3R's state_pos pattern)
         # NOTE: ROPE kernel expects positions as Long (int64) type, not Float
@@ -182,7 +178,8 @@ class RecurrentSlotAttention(nn.Module):
         slot_pos: torch.Tensor,
         features: torch.Tensor,
         feature_pos: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return_attn: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Compute attention using TTT3R's CrossAttention with ROPE.
         
@@ -191,10 +188,11 @@ class RecurrentSlotAttention(nn.Module):
             slot_pos: Slot positions for ROPE (B, K, 2)
             features: Input features (B, N, D_feat)
             feature_pos: Feature positions for ROPE (B, N, 2)
+            return_attn: Whether to return attention maps
             
         Returns:
             updates: Aggregated features (B, K, D_slot)
-            attn_weights: Not returned by CrossAttention, return None
+            attn_map: Cross-attention map if return_attn=True, else None
         """
         B, K, _ = slots.shape
         _, N, _ = features.shape
@@ -208,15 +206,26 @@ class RecurrentSlotAttention(nn.Module):
         
         # Use TTT3R's CrossAttention with ROPE
         # query=slots, key=features, value=features, qpos=slot_pos, kpos=feature_pos
-        updates = self.cross_attn(
-            query=slots_norm,
-            key=features_proj,
-            value=features_proj,
-            qpos=slot_pos,
-            kpos=feature_pos
-        )  # (B, K, D_slot)
-        
-        return updates, None  # CrossAttention doesn't return attn weights by default
+        if return_attn:
+            updates, attn_map = self.cross_attn(
+                query=slots_norm,
+                key=features_proj,
+                value=features_proj,
+                qpos=slot_pos,
+                kpos=feature_pos,
+                return_attn=True
+            )  # updates: (B, K, D_slot), attn_map: (B, num_heads, K, N)
+            return updates, attn_map
+        else:
+            updates = self.cross_attn(
+                query=slots_norm,
+                key=features_proj,
+                value=features_proj,
+                qpos=slot_pos,
+                kpos=feature_pos,
+                return_attn=False
+            )  # (B, K, D_slot)
+            return updates, None
     
     def _slot_attention_iteration(
         self,
@@ -224,6 +233,7 @@ class RecurrentSlotAttention(nn.Module):
         slot_pos: torch.Tensor,
         features: torch.Tensor,
         feature_pos: torch.Tensor,
+        return_attn: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Single iteration of slot attention with ROPE.
@@ -233,16 +243,17 @@ class RecurrentSlotAttention(nn.Module):
             slot_pos: Slot positions for ROPE (B, K, 2)
             features: Input features (B, N, D_feat)
             feature_pos: Feature positions for ROPE (B, N, 2)
+            return_attn: Whether to return attention maps
             
         Returns:
             updated_slots: Updated slot states (B, K, D_slot)
-            attn_weights: Attention weights (None for now)
+            attn_map: Cross-attention map if return_attn=True (B, H, K, N)
         """
         B, K, D_slot = slots.shape
         
         # Compute attention using TTT3R's CrossAttention with ROPE
-        updates, attn_weights = self._compute_attention(
-            slots, slot_pos, features, feature_pos
+        updates, attn_map = self._compute_attention(
+            slots, slot_pos, features, feature_pos, return_attn=return_attn
         )
         
         # Update slots using GRU
@@ -255,7 +266,7 @@ class RecurrentSlotAttention(nn.Module):
         # Apply MLP
         slots_refined = slots_updated + self.mlp(self.norm_mlp(slots_updated))
         
-        return slots_refined, attn_weights
+        return slots_refined, attn_map
     
     def _decoder(
         self,
@@ -269,40 +280,71 @@ class RecurrentSlotAttention(nn.Module):
         """
         Decode slots from features using iterative attention with ROPE (TTT3R's _decoder pattern).
         
+        TTT3R Update Pattern:
+        --------------------
+        1. Collect cross-attention maps from all decoder iterations
+        2. Aggregate: cross_attn_state.mean(dim=(-1, -2)) across spatial and head dimensions
+        3. Apply sigmoid to get confidence: slot_confidence = sigmoid(state_query_img_key)
+        4. Weighted update: new_slots = current * confidence + prev * (1 - confidence)
+        
+        Reference (TTT3R model.py ~line 905):
+            cross_attn_state = rearrange(cat(cross_attn_state), 'l h nstate nimg -> 1 nstate nimg (l h)')
+            state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
+            update_mask1 = update_mask * sigmoid(state_query_img_key) * 1.0
+            state_feat = new_state_feat * update_mask1 + state_feat * (1 - update_mask1)
+        
         Args:
             slots: Initial slot states (B, K, D_slot)
             slot_pos: Slot positions for ROPE (B, K, 2)
             features: Encoded features from TTT3R's _encode_image (B, N, D_feat)
             feature_pos: Feature positions from TTT3R's patch_embed (B, N, 2)
             prev_slots: Previous slot states for recurrent updates
-            confidence: Optional confidence map for TTT3R-style updates
+            confidence: Optional confidence map (not used, kept for API compatibility)
             
         Returns:
             final_slots: Final slot states (B, K, D_slot)
-            attn_weights: Final attention weights (None for now)
+            final_attn_map: Final attention map (B, H, K, N) or None
             slot_confidence: Per-slot confidence (B, K) if using TTT3R update
         """
         # Iterative attention refinement with ROPE
+        # Collect cross-attention maps from all iterations (like TTT3R's decoder blocks)
         current_slots = slots
-        attn_weights = None
+        cross_attn_maps = []
+        final_attn_map = None
+        
         for i in range(self.num_iterations):
-            current_slots, attn_weights = self._slot_attention_iteration(
-                current_slots, slot_pos, features, feature_pos
+            
+            current_slots, attn_map = self._slot_attention_iteration(
+                current_slots, slot_pos, features, feature_pos, return_attn=True
             )
+            cross_attn_maps.append(attn_map)  # (B, H, K, N)
+            final_attn_map = attn_map  # Keep last iteration's attention map
         
         # TTT3R-style confidence-weighted update with previous slots
         slot_confidence = None
-        if prev_slots is not None and self.model_update_type == "ttt3r":
-            # Compute slot confidence from slot features
-            slot_confidence = torch.sigmoid(
-                self.confidence_proj(current_slots).squeeze(-1)
-            )  # (B, K)
+        if prev_slots is not None and self.model_update_type == "ttt3r" and len(cross_attn_maps) > 0:
+            # Following TTT3R pattern:
+            # cross_attn_state shape: [num_iterations-1, B, H, K, N]
+            # Rearrange: 'l b h k n -> b k n (l h)'
+            cross_attn_state = torch.stack(cross_attn_maps, dim=0)  # (L, B, H, K, N)
+            L, B, H, K, N = cross_attn_state.shape
             
-            # Update with confidence weighting
+            # Rearrange following TTT3R: 'l h nstate nimg -> 1 nstate nimg (l h)'
+            # In our case: 'l b h k n -> b k n (l h)'
+            cross_attn_state = cross_attn_state.permute(1, 3, 4, 0, 2)  # (B, K, N, L, H)
+            cross_attn_state = cross_attn_state.reshape(B, K, N, L * H)  # (B, K, N, L*H)
+            
+            # Compute update weight from cross-attention (TTT3R's state_query_img_key)
+            # state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
+            slot_confidence = cross_attn_state.mean(dim=(-1, -2))  # (B, K)
+            slot_confidence = torch.sigmoid(slot_confidence)  # (B, K)
+            
+            # Update with confidence weighting (TTT3R pattern)
+            # update_mask1 = update_mask * sigmoid(state_query_img_key) * 1.0
             update_weight = slot_confidence.unsqueeze(-1)  # (B, K, 1)
             current_slots = current_slots * update_weight + prev_slots * (1 - update_weight)
         
-        return current_slots, attn_weights, slot_confidence
+        return current_slots, final_attn_map, slot_confidence
     
     def forward(
         self,
@@ -348,10 +390,22 @@ class RecurrentSlotAttention(nn.Module):
             slots, slot_pos, features, feature_pos, prev_slots, confidence
         )
         
+        # Convert attention weights to masks (B, K, N)
+        # attn_weights is (B, H, K, N), we need to average over heads and normalize
+        masks = None
+        if attn_weights is not None:
+            # Average over attention heads: (B, H, K, N) -> (B, K, N)
+            masks = attn_weights.mean(dim=1)  # (B, K, N)
+            
+            # Normalize masks so they sum to 1 over slots for each feature
+            # This gives the grouping/assignment of features to slots
+            masks = F.softmax(masks, dim=1)  # (B, K, N)
+        
         output = {
             'slots': final_slots,
             'slot_pos': slot_pos,
-            'attn_weights': attn_weights,
+            'attn_weights': attn_weights,  # (B, H, K, N) - raw attention maps
+            'masks': masks,  # (B, K, N) - normalized grouping masks
         }
         
         if slot_confidence is not None:

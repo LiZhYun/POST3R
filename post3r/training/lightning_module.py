@@ -275,30 +275,22 @@ class POST3RLightningModule(pl.LightningModule):
         else:
             aux_outputs = {}
         
-        # Compute losses frame by frame
-        total_loss = 0.0
-        num_frames = frames.shape[1]
+        # Compute loss for all frames at once (vectorized - much more efficient!)
+        pred_pointmap = outputs['recon_pointmap']  # (B, T, H_dec, W_dec, 3)
+        gt_pointmap = outputs['gt_pointmap']  # (B, T, H_gt, W_gt, 3)
+        pred_features = outputs['recon_features']  # (B, T, H_feat, W_feat, D)
+        gt_features = outputs['gt_features']  # (B, T, H_feat, W_feat, D)
+        confidence = outputs.get('confidence')  # (B, T, H, W) or None
         
-        for t in range(num_frames):
-            # Get predictions and targets for frame t
-            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
-            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
-            pred_features = outputs['recon_features'][:, t]  # (B, H_feat, W_feat, D)
-            gt_features = outputs['gt_features'][:, t]  # (B, H_feat, W_feat, D)
-            confidence = outputs.get('confidence')[:, t] if outputs.get('confidence') is not None else None
-            
-            # Compute combined loss (pointmap + features)
-            loss_dict = self.loss_fn(
-                pred_pointmap=pred_pointmap,
-                gt_pointmap=gt_pointmap,
-                pred_features=pred_features,
-                gt_features=gt_features,
-                confidence=confidence,
-            )
-            total_loss += loss_dict['loss']
-        
-        # Average over frames
-        total_loss = total_loss / num_frames
+        # Compute combined loss (pointmap + features) for all frames at once
+        loss_dict = self.loss_fn(
+            pred_pointmap=pred_pointmap,
+            gt_pointmap=gt_pointmap,
+            pred_features=pred_features,
+            gt_features=gt_features,
+            confidence=confidence,
+        )
+        total_loss = loss_dict['loss']
         
         # Logging dict (SlotContrast-style)
         to_log = {'train/loss': total_loss}
@@ -337,28 +329,22 @@ class POST3RLightningModule(pl.LightningModule):
         outputs = self.model.forward_sequence(frames)
         aux_outputs = self.aux_forward(outputs, frames)
         
-        # Compute losses for all frames
-        total_loss = 0.0
-        num_frames = frames.shape[1]
+        # Compute loss for all frames at once (vectorized - much more efficient!)
+        pred_pointmap = outputs['recon_pointmap']  # (B, T, H_dec, W_dec, 3)
+        gt_pointmap = outputs['gt_pointmap']  # (B, T, H_gt, W_gt, 3)
+        pred_features = outputs['recon_features']  # (B, T, H_feat, W_feat, D)
+        gt_features = outputs['gt_features']  # (B, T, H_feat, W_feat, D)
+        confidence = outputs.get('confidence')  # (B, T, H, W) or None
         
-        for t in range(num_frames):
-            pred_pointmap = outputs['recon_pointmap'][:, t]  # (B, H_dec, W_dec, 3)
-            gt_pointmap = outputs['gt_pointmap'][:, t]  # (B, H_gt, W_gt, 3)
-            pred_features = outputs['recon_features'][:, t]  # (B, H_feat, W_feat, D)
-            gt_features = outputs['gt_features'][:, t]  # (B, H_feat, W_feat, D)
-            confidence = outputs.get('confidence')[:, t] if outputs.get('confidence') is not None else None
-            
-            # Compute combined loss (pointmap + features)
-            loss_dict = self.loss_fn(
-                pred_pointmap=pred_pointmap,
-                gt_pointmap=gt_pointmap,
-                pred_features=pred_features,
-                gt_features=gt_features,
-                confidence=confidence,
-            )
-            total_loss += loss_dict['loss']
-        
-        total_loss = total_loss / num_frames
+        # Compute combined loss (pointmap + features) for all frames at once
+        loss_dict = self.loss_fn(
+            pred_pointmap=pred_pointmap,
+            gt_pointmap=gt_pointmap,
+            pred_features=pred_features,
+            gt_features=gt_features,
+            confidence=confidence,
+        )
+        total_loss = loss_dict['loss']
         
         # Logging dict
         to_log = {'val/loss': total_loss}

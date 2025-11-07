@@ -7,6 +7,8 @@ This module wraps the pretrained TTT3R model to extract:
 3. World-coordinate pointmaps (X_world,t) as pseudo-ground-truth
 
 The backbone is FROZEN during POST3R training.
+
+Optional DINOv2 encoder support for ablation studies.
 """
 
 import sys
@@ -21,6 +23,11 @@ import warnings
 TTT3R_PATH = Path(__file__).parent.parent.parent / "submodules" / "ttt3r" / "src"
 if str(TTT3R_PATH) not in sys.path:
     sys.path.insert(0, str(TTT3R_PATH))
+
+# Add SlotContrast to path for DINOv2 encoder
+SLOTCONTRAST_PATH = Path(__file__).parent.parent.parent / "submodules" / "slotcontrast"
+if str(SLOTCONTRAST_PATH) not in sys.path:
+    sys.path.insert(0, str(SLOTCONTRAST_PATH))
 
 
 class TTT3RBackbone(nn.Module):
@@ -42,6 +49,10 @@ class TTT3RBackbone(nn.Module):
         device: str = 'cuda',
         frozen: bool = True,
         extract_features_from: str = 'encoder',
+        use_dinov2: bool = False,  # NEW: Option to use DINOv2 encoder instead of TTT3R encoder
+        dinov2_model: str = 'vit_base_patch14_dinov2',  # DINOv2 model name
+        dinov2_features_key: str = 'vit_block12',  # Which DINOv2 layer to extract features from
+        feature_dim: int = 768,  # DINOv2 feature dimension (768 for base, 1024 for large)
     ):
         """
         Initialize TTT3R backbone wrapper.
@@ -52,6 +63,10 @@ class TTT3RBackbone(nn.Module):
             device: Device to run on ('cuda' or 'cpu')
             frozen: Whether to freeze all parameters (should be True)
             extract_features_from: Which layer to extract features from
+            use_dinov2: If True, use DINOv2 encoder for features instead of TTT3R encoder
+            dinov2_model: DINOv2 model name (from timm)
+            dinov2_features_key: Which DINOv2 layer to extract features from
+            feature_dim: Output feature dimension (768 for DINOv2-base, 1024 for TTT3R)
         """
         super().__init__()
         
@@ -59,6 +74,8 @@ class TTT3RBackbone(nn.Module):
         self.input_size = input_size
         self.device = device
         self.frozen = frozen
+        self.use_dinov2 = use_dinov2
+        self.feature_dim = feature_dim
         
         # Import TTT3R components
         try:
@@ -70,18 +87,35 @@ class TTT3RBackbone(nn.Module):
                 f"Make sure submodules are initialized. Error: {e}"
             )
         
-        # Load pretrained model
-        # Note: TTT3R checkpoints use OmegaConf which requires special handling in PyTorch 2.6+
+        # Load pretrained TTT3R model (always needed for pose and pointmap)
         print(f"Loading TTT3R model from {model_path}...")
         self.model = ARCroco3DStereo.from_pretrained(model_path).to(device)
         self.model.config.model_update_type = "ttt3r"
-
         self.model.eval()
         
-        # Freeze parameters
+        # Freeze TTT3R parameters
         if frozen:
             self.freeze()
             print("TTT3R backbone frozen (no gradients)")
+        
+        # Initialize DINOv2 encoder if requested
+        self.dinov2_encoder = None
+        if use_dinov2:
+            print(f"Initializing DINOv2 encoder: {dinov2_model}")
+            from slotcontrast.modules.encoders import TimmExtractor
+            
+            self.dinov2_encoder = TimmExtractor(
+                model=dinov2_model,
+                pretrained=True,
+                frozen=True,
+                features=dinov2_features_key,
+            ).to(device)
+            
+            # Compute number of patches for DINOv2
+            # DINOv2 with patch14 on 518x518 image: (518/14)^2 ≈ 37^2 = 1369 patches
+            # For 512x512: (512/14)^2 ≈ 36.57^2 ≈ 1369 patches (will be rounded)
+            self.dinov2_patch_size = 14
+            print(f"DINOv2 encoder initialized (frozen, feature_dim={feature_dim})")
         
         # Memory state (maintained across frames)
         self.memory_state = None
@@ -318,6 +352,53 @@ class TTT3RBackbone(nn.Module):
         
         return pointmaps
     
+    def _extract_features_dinov2(
+        self, 
+        original_images: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Extract features using DINOv2 encoder instead of TTT3R encoder.
+        
+        Args:
+            original_images: Original input images (B, C, H, W) - NOT preprocessed by TTT3R
+            
+        Returns:
+            Tuple of:
+            - features: (B, N, D) where N is number of patches, D is feature dim (768 for DINOv2-base)
+            - positions: (B, N, 2) patch positions for ROPE compatibility
+        """
+        # DINOv2 expects the original images (already normalized by dataset transform)
+        # Do NOT use TTT3R preprocessing for DINOv2
+        with torch.no_grad():
+            features_dict = self.dinov2_encoder(original_images)
+            
+            # Get the main features
+            # TimmExtractor returns dict for ViT models
+            if isinstance(features_dict, dict):
+                # Extract the specific layer features (e.g., 'vit_block12')
+                feat_key = list(features_dict.keys())[0]
+                features = features_dict[feat_key]
+            else:
+                features = features_dict
+            
+            # Features should be (B, N, D) format from ViT
+            # TimmExtractor already removes CLS token for us
+            if features.ndim == 3:
+                B, N, D = features.shape
+            else:
+                raise ValueError(f"Unexpected feature shape from DINOv2: {features.shape}")
+            
+            # Create position embeddings compatible with ROPE
+            # Generate 2D grid positions for patches
+            H_patch = W_patch = int(N ** 0.5)
+            y_pos = torch.arange(H_patch, device=features.device, dtype=torch.long)
+            x_pos = torch.arange(W_patch, device=features.device, dtype=torch.long)
+            yy, xx = torch.meshgrid(y_pos, x_pos, indexing='ij')
+            positions = torch.stack([yy, xx], dim=-1).reshape(-1, 2)  # (N, 2)
+            positions = positions.unsqueeze(0).expand(B, -1, -1)  # (B, N, 2)
+            
+        return features, positions
+    
     def forward(
         self, 
         frames: torch.Tensor,
@@ -378,29 +459,32 @@ class TTT3RBackbone(nn.Module):
             # Extract prediction
             pred = preds[0]
             
-            # Extract encoder features using the properly preprocessed image
+            # Extract encoder features
             processed_img = view['img']  # (B, C, H_resized, W_resized)
             true_shape = view['true_shape']  # (B, 2)
             
-            img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
+            if self.use_dinov2:
+                # Use DINOv2 encoder for features - pass original frames, not preprocessed
+                feat, feat_pos = self._extract_features_dinov2(frames)
+                # feat: (B, N, D) where D is DINOv2 feature dim (768 for base)
+                N = feat.shape[1]
+                feat_size = int(N ** 0.5)
+                features = feat.reshape(B, feat_size, feat_size, -1)
+            else:
+                # Use TTT3R encoder for features
+                img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
+                feat = img_out[-1]  # (B, N, D)
+                N = feat.shape[1]
+                feat_pos = img_pos  # (B, N, 2) for ROPE
+                feat_size = int(N ** 0.5)
+                features = feat.reshape(B, feat_size, feat_size, -1)
             
-            # Extract features from the last encoder layer
-            feat = img_out[-1]  # (B, N, D)
-            N = feat.shape[1]
-            
-            # Keep positions from TTT3R's patch_embed (B, N, 2) for ROPE
-            feat_pos = img_pos  # (B, N, 2)
-            
-            # Reshape to spatial grid (B, H_f, W_f, D)
-            feat_size = int(N ** 0.5)
-            features = feat.reshape(B, feat_size, feat_size, -1)
-            
-            # Extract poses
+            # Extract poses (always from TTT3R)
             if 'camera_pose' not in pred:
                 raise KeyError(f"No 'camera_pose' in prediction. Keys: {list(pred.keys())}")
             poses = pred['camera_pose']
             
-            # Extract 3D pointmaps
+            # Extract 3D pointmaps (always from TTT3R)
             if 'pts3d_in_other_view' in pred:
                 pointmaps = pred['pts3d_in_other_view']
             elif 'pts3d' in pred:
@@ -520,25 +604,37 @@ class TTT3RBackbone(nn.Module):
                 pred = preds[t]
                 view_t = views[t]
                 
-                # Extract encoder features using the properly resized image from the view
-                # The view already contains the correctly preprocessed image
+                # Extract encoder features
                 processed_img = view_t['img']  # (B, C, H_resized, W_resized)
                 true_shape = view_t['true_shape']  # (B, 2)
                 
-                # Encode image to get features
-                img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
-                feat = img_out[-1]  # (B, N, D)
-                N = feat.shape[1]
-                feat_size = int(N ** 0.5)
-                features_t = feat.reshape(B, feat_size, feat_size, -1)
-                all_features.append(features_t)
-                all_feature_pos.append(img_pos)  # (B, N, 2) for ROPE
+                # Get original frame for DINOv2
+                frame_t = frames[:, t]  # (B, C, H, W)
                 
-                # Extract poses - already in correct format (B, 7) [tx, ty, tz, qx, qy, qz, qw]
+                if self.use_dinov2:
+                    # Use DINOv2 encoder for features - pass original frame, not preprocessed
+                    feat, feat_pos = self._extract_features_dinov2(frame_t)
+                    # feat: (B, N, D) where D is DINOv2 feature dim (768 for base)
+                    N = feat.shape[1]
+                    feat_size = int(N ** 0.5)
+                    features_t = feat.reshape(B, feat_size, feat_size, -1)
+                else:
+                    # Use TTT3R encoder for features
+                    img_out, img_pos, _ = self.model._encode_image(processed_img, true_shape)
+                    feat = img_out[-1]  # (B, N, D)
+                    N = feat.shape[1]
+                    feat_pos = img_pos  # (B, N, 2) for ROPE
+                    feat_size = int(N ** 0.5)
+                    features_t = feat.reshape(B, feat_size, feat_size, -1)
+                
+                all_features.append(features_t)
+                all_feature_pos.append(feat_pos)  # (B, N, 2) for ROPE
+                
+                # Extract poses - always from TTT3R
                 poses_t = pred['camera_pose']
                 all_poses.append(poses_t)
                 
-                # Extract pointmaps - already at output resolution from TTT3R
+                # Extract pointmaps - always from TTT3R
                 if 'pts3d_in_other_view' in pred:
                     pointmaps_t = pred['pts3d_in_other_view']
                 elif 'pts3d' in pred:

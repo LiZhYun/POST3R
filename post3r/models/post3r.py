@@ -36,6 +36,8 @@ class POST3R(nn.Module):
         # Backbone config
         ttt3r_checkpoint: str,
         freeze_backbone: bool = True,
+        use_dinov2: bool = False,  # Use DINOv2 encoder instead of TTT3R encoder
+        dinov2_model: str = "vit_base_patch14_dinov2",  # DINOv2 model name
         
         # Slot attention config
         num_slots: int = 8,
@@ -49,7 +51,7 @@ class POST3R(nn.Module):
         n_patches: int = 1024,  # Number of patches from encoder (32x32 for 512x512)
         
         # Feature projection
-        feature_dim: int = 1024,  # TTT3R encoder output dimension (enc_embed_dim)
+        feature_dim: int = 1024,  # Encoder output dimension (1024 for TTT3R, 768 for DINOv2-base)
     ):
         """
         Initialize POST3R model.
@@ -57,6 +59,8 @@ class POST3R(nn.Module):
         Args:
             ttt3r_checkpoint: Path to pretrained TTT3R checkpoint
             freeze_backbone: Whether to freeze TTT3R backbone
+            use_dinov2: Whether to use DINOv2 encoder instead of TTT3R encoder (for ablation)
+            dinov2_model: DINOv2 model name (e.g., vit_base_patch14_dinov2)
             num_slots: Number of object slots
             slot_dim: Dimension of each slot
             num_iterations: Number of slot attention iterations
@@ -64,7 +68,7 @@ class POST3R(nn.Module):
             decoder_resolution: Output resolution for decoder (default: 512x512)
             decoder_hidden_dims: Hidden dimensions for decoder CNN
             n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
-            feature_dim: Dimension of TTT3R features
+            feature_dim: Dimension of encoder features (1024 for TTT3R, 768 for DINOv2-base)
         """
         super().__init__()
         
@@ -72,11 +76,15 @@ class POST3R(nn.Module):
         self.num_slots = num_slots
         self.slot_dim = slot_dim
         self.feature_dim = feature_dim
+        self.use_dinov2 = use_dinov2
         
-        # 1. TTT3R Backbone
+        # 1. TTT3R Backbone (with optional DINOv2 encoder)
         self.backbone = TTT3RBackbone(
             model_path=ttt3r_checkpoint,
-            frozen=freeze_backbone
+            frozen=freeze_backbone,
+            use_dinov2=use_dinov2,
+            dinov2_model=dinov2_model,
+            feature_dim=feature_dim
         )
         
         # 2. Recurrent Slot Attention (TTT3R-style)
@@ -84,7 +92,7 @@ class POST3R(nn.Module):
         # Now with ROPE support from TTT3R
         self.slot_attention = RecurrentSlotAttention(
             num_slots=num_slots,
-            feature_dim=feature_dim,  # 1024 (TTT3R encoder output)
+            feature_dim=feature_dim,  # 1024 for TTT3R, 768 for DINOv2-base
             slot_dim=slot_dim,         # 128 (desired slot dimension)
             num_iterations=num_iterations,
             mlp_hidden_dim=mlp_hidden_dim,
@@ -97,7 +105,7 @@ class POST3R(nn.Module):
         # Dual-head decoder: pointmap head + feature head
         self.decoder = POST3RDecoder(
             slot_dim=slot_dim,
-            feature_dim=feature_dim,  # 1024 for TTT3R encoder output
+            feature_dim=feature_dim,  # 1024 for TTT3R, 768 for DINOv2-base
             n_patches=n_patches,  # Number of patches from encoder (from config)
             pointmap_resolution=decoder_resolution,
             pointmap_hidden_dims=decoder_hidden_dims,

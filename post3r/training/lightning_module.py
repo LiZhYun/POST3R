@@ -39,6 +39,11 @@ class POST3RLightningModule(pl.LightningModule):
         decoder_resolution: tuple = (64, 64),
         n_patches: int = 1024,  # Number of patches from encoder
         
+        # Encoder ablation config
+        use_dinov2: bool = False,  # Use DINOv2 encoder instead of TTT3R encoder
+        dinov2_model: str = "vit_base_patch14_dinov2",  # DINOv2 model name
+        feature_dim: int = 1024,  # Feature dimension (1024 for TTT3R, 768 for DINOv2-base)
+        
         # Loss config
         pointmap_weight: float = 0.5,
         feature_weight: float = 1.0,
@@ -75,6 +80,9 @@ class POST3RLightningModule(pl.LightningModule):
             num_iterations: Number of slot attention iterations
             decoder_resolution: Output resolution for decoder
             n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
+            use_dinov2: Whether to use DINOv2 encoder instead of TTT3R encoder
+            dinov2_model: DINOv2 model name (e.g., vit_base_patch14_dinov2)
+            feature_dim: Encoder feature dimension (1024 for TTT3R, 768 for DINOv2-base)
             pointmap_weight: Weight for pointmap reconstruction loss
             feature_weight: Weight for feature reconstruction loss
             learning_rate: Learning rate
@@ -103,6 +111,9 @@ class POST3RLightningModule(pl.LightningModule):
             num_iterations=num_iterations,
             decoder_resolution=decoder_resolution,
             n_patches=n_patches,
+            use_dinov2=use_dinov2,
+            dinov2_model=dinov2_model,
+            feature_dim=feature_dim,
         )
         
         # Create loss function with dual loss (pointmap + features)

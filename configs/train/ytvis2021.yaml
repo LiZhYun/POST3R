@@ -8,12 +8,17 @@ checkpoint_every_n_steps: 5000
 model:
   ttt3r_checkpoint: "submodules/ttt3r/src/cut3r_512_dpt_4_64.pth"
   
+  # Encoder ablation: TTT3R vs DINOv2
+  use_dinov2: true  # Set to true for DINOv2 encoder ablation study
+  dinov2_model: "vit_base_patch14_dinov2"  # DINOv2 model name
+  feature_dim: 768  # 1024 for TTT3R, 768 for DINOv2-base
+
   num_slots: 7
   slot_dim: 64
   num_iterations: 3
 
   decoder_resolution: [128, 128]  # Match input video resolution
-  n_patches: 1024  # Number of patches from TTT3R encoder (32x32 for 512x512 image with patch_size=16)
+  n_patches: 1369  # 1024 for TTT3R, 1369 for DINOv2-base
 
   # Loss weights
   pointmap_weight: 1.0

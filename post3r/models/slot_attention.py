@@ -145,8 +145,8 @@ class RecurrentSlotAttention(nn.Module):
         slots = self.register_tokens(slot_indices)  # (num_slots, slot_dim)
         slots = slots.unsqueeze(0).expand(batch_size, -1, -1)  # (B, num_slots, slot_dim)
         
-        # # Add small noise for diversity
-        # slots = slots + torch.randn_like(slots) * 0.01
+        # Add small noise for diversity
+        slots = slots + torch.randn_like(slots) * 0.01
         
         # Generate slot_pos for ROPE (following TTT3R's state_pos pattern)
         # NOTE: ROPE kernel expects positions as Long (int64) type, not Float

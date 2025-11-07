@@ -46,6 +46,7 @@ class POST3R(nn.Module):
         # Decoder config
         decoder_resolution: Tuple[int, int] = (512, 512),  # Default output resolution
         decoder_hidden_dims: Tuple[int, ...] = (256, 256, 128),
+        n_patches: int = 1024,  # Number of patches from encoder (32x32 for 512x512)
         
         # Feature projection
         feature_dim: int = 1024,  # TTT3R encoder output dimension (enc_embed_dim)
@@ -62,6 +63,7 @@ class POST3R(nn.Module):
             mlp_hidden_dim: Hidden dimension for slot attention MLP
             decoder_resolution: Output resolution for decoder (default: 512x512)
             decoder_hidden_dims: Hidden dimensions for decoder CNN
+            n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
             feature_dim: Dimension of TTT3R features
         """
         super().__init__()
@@ -96,6 +98,7 @@ class POST3R(nn.Module):
         self.decoder = POST3RDecoder(
             slot_dim=slot_dim,
             feature_dim=feature_dim,  # 1024 for TTT3R encoder output
+            n_patches=n_patches,  # Number of patches from encoder (from config)
             pointmap_resolution=decoder_resolution,
             pointmap_hidden_dims=decoder_hidden_dims,
         )

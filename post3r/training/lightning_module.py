@@ -37,6 +37,7 @@ class POST3RLightningModule(pl.LightningModule):
         slot_dim: int = 128,
         num_iterations: int = 3,
         decoder_resolution: tuple = (64, 64),
+        n_patches: int = 1024,  # Number of patches from encoder
         
         # Loss config
         pointmap_weight: float = 0.5,
@@ -73,6 +74,7 @@ class POST3RLightningModule(pl.LightningModule):
             slot_dim: Dimension of each slot
             num_iterations: Number of slot attention iterations
             decoder_resolution: Output resolution for decoder
+            n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
             pointmap_weight: Weight for pointmap reconstruction loss
             feature_weight: Weight for feature reconstruction loss
             learning_rate: Learning rate
@@ -100,6 +102,7 @@ class POST3RLightningModule(pl.LightningModule):
             slot_dim=slot_dim,
             num_iterations=num_iterations,
             decoder_resolution=decoder_resolution,
+            n_patches=n_patches,
         )
         
         # Create loss function with dual loss (pointmap + features)

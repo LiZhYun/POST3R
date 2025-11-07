@@ -8,11 +8,20 @@ This module decodes object-centric slots into 3D pointmaps and features:
 4. Aggregates slot outputs into scene pointmap and features
 """
 
+import sys
+import os
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict, List
 import math
+
+# Add SlotContrast to path
+SLOTCONTRAST_PATH = Path(__file__).parent.parent.parent / "submodules" / "slotcontrast"
+if str(SLOTCONTRAST_PATH) not in sys.path:
+    sys.path.insert(0, str(SLOTCONTRAST_PATH))
 
 
 class PoseEmbedding(nn.Module):
@@ -67,10 +76,10 @@ class PoseEmbedding(nn.Module):
 
 class FeatureHead(nn.Module):
     """
-    Feature decoder head following TTT3R's LinearPts3d architecture.
+    Feature decoder head following SlotContrast's MLPDecoder pattern.
     
     Decodes slots into feature maps that reconstruct the encoder features.
-    Uses MLP projection with pixel shuffle upsampling.
+    Uses MLP with positional embeddings (like SlotContrast) + pose embeddings (from POST3R).
     """
     
     def __init__(
@@ -79,8 +88,9 @@ class FeatureHead(nn.Module):
         pose_dim: int = 7,
         pose_embed_dim: int = 64,
         output_dim: int = 1024,
-        patch_size: int = 16,
-        hidden_dim: int = 512,
+        n_patches: int = 1024,  # Number of patches from TTT3R encoder (32x32 for 512x512 image with patch_size=16)
+        hidden_dims: Tuple[int, ...] = (512,),
+        activation: str = "relu",
     ):
         """
         Initialize feature head.
@@ -89,28 +99,35 @@ class FeatureHead(nn.Module):
             slot_dim: Dimension of each slot
             pose_dim: Dimension of pose (7 for quaternion + translation)
             pose_embed_dim: Dimension of pose embedding
-            output_dim: Output feature dimension (should match encoder output)
-            patch_size: Patch size for pixel shuffle upsampling
-            hidden_dim: Hidden dimension for MLP
+            output_dim: Output feature dimension (should match encoder output, e.g., 1024)
+            n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
+            hidden_dims: Hidden dimensions for MLP (tuple of ints)
+            activation: Activation function name
         """
         super().__init__()
         
         self.slot_dim = slot_dim
         self.output_dim = output_dim
-        self.patch_size = patch_size
+        self.n_patches = n_patches
         
-        # Pose embedding
+        # Pose embedding (POST3R-specific)
         self.pose_embedding = PoseEmbedding(pose_dim, pose_embed_dim)
         
         # Input dimension: slot + pose
         input_dim = slot_dim + pose_embed_dim
         
-        # MLP projection: slot -> (output_dim + 1) * patch_size^2
-        # +1 for alpha mask
-        self.proj = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, (output_dim + 1) * patch_size ** 2)
+        # Positional embedding (SlotContrast-style)
+        # Shape: (1, 1, n_patches, input_dim)
+        self.pos_emb = nn.Parameter(torch.randn(1, 1, n_patches, input_dim) * input_dim**-0.5)
+        
+        # MLP decoder (SlotContrast-style)
+        # Input: slot + pose + pos_emb -> Output: features + alpha mask
+        from slotcontrast.modules.networks import MLP
+        self.mlp = MLP(
+            input_dim, 
+            output_dim + 1,  # +1 for alpha mask
+            list(hidden_dims), 
+            activation=activation
         )
     
     def forward(
@@ -125,7 +142,7 @@ class FeatureHead(nn.Module):
         Args:
             slots: Object slots (B, K, D_slot)
             pose: Camera pose (B, 7)
-            target_shape: Target spatial shape (H, W)
+            target_shape: Target spatial shape (H, W) - used for reshaping output
             
         Returns:
             Dictionary with:
@@ -135,42 +152,45 @@ class FeatureHead(nn.Module):
         B, K, _ = slots.shape
         H, W = target_shape
         
-        # Embed pose
-        pose_embed = self.pose_embedding(pose)  # (B, D_pose)
+        # Embed pose (B, 7) -> (B, D_pose)
+        pose_embed = self.pose_embedding(pose)
         
-        # Add pose to each slot
-        pose_expand = pose_embed.unsqueeze(1).expand(B, K, -1)  # (B, K, D_pose)
-        slots_with_pose = torch.cat([slots, pose_expand], dim=-1)  # (B, K, D_slot + D_pose)
+        # Add pose to each slot: (B, K, D_slot) + (B, 1, D_pose) -> (B, K, D_slot + D_pose)
+        pose_expand = pose_embed.unsqueeze(1).expand(B, K, -1)
+        slots_with_pose = torch.cat([slots, pose_expand], dim=-1)
         
-        # Project through MLP
-        # (B, K, D_slot + D_pose) -> (B, K, (D_feat + 1) * patch_size^2)
-        projected = self.proj(slots_with_pose)
+        # Expand slots to all patches: (B, K, D) -> (B, K, N, D)
+        slots_expanded = slots_with_pose.unsqueeze(2).expand(B, K, self.n_patches, -1)
         
-        # Reshape for pixel shuffle
-        # We need to go from slot-level to spatial
-        # Each slot predicts features at low resolution, then pixel shuffle upsamples
-        H_low = H // self.patch_size
-        W_low = W // self.patch_size
+        # Add positional embeddings (SlotContrast-style)
+        # pos_emb: (1, 1, N, D) -> broadcast to (B, K, N, D)
+        slots_with_pos = slots_expanded + self.pos_emb
         
-        # Reshape: (B, K, (D_feat + 1) * P^2) -> (B*K, (D_feat + 1) * P^2)
-        projected_flat = projected.view(B * K, -1)
+        # Apply MLP: (B, K, N, D) -> (B, K, N, output_dim + 1)
+        mlp_out = self.mlp(slots_with_pos)
         
-        # Reshape to (B*K, D_feat + 1, H_low, W_low) for pixel shuffle
-        # We need to first reshape to (B*K, D_feat + 1, 1, 1) then expand
-        # Actually, we need to handle this differently
+        # Split into features and alpha
+        recons = mlp_out[..., :self.output_dim]  # (B, K, N, output_dim)
+        alpha = mlp_out[..., self.output_dim:]    # (B, K, N, 1)
         
-        # Simpler approach: treat each slot as producing a flat feature vector
-        # that we reshape to spatial after aggregation
+        # Compute masks via softmax over slots
+        masks = torch.softmax(alpha, dim=1)  # (B, K, N, 1)
         
-        # Split features and alpha
-        features_flat = projected[:, :, :self.output_dim * self.patch_size ** 2]  # (B, K, D*P^2)
-        alphas_flat = projected[:, :, self.output_dim * self.patch_size ** 2:]  # (B, K, P^2)
+        # Aggregate features: sum over slots weighted by masks
+        recon = torch.sum(recons * masks, dim=1)  # (B, N, output_dim)
         
-        # Reshape to spatial for each slot
-        # (B, K, D*P^2) -> (B, K, D, P, P) -> (B, K, D, H_low, W_low) via pixel shuffle concept
-        # For simplicity, we'll use a per-slot spatial broadcast then aggregate
+        # Reshape to spatial: (B, N, D) -> (B, H, W, D)
+        # Assuming N = H * W
+        assert self.n_patches == H * W, f"n_patches ({self.n_patches}) must equal H*W ({H*W})"
+        recon = recon.view(B, H, W, self.output_dim)
         
-        # Actually, let's follow LinearPts3d more closely:
+        # Reshape masks: (B, K, N, 1) -> (B, K, H, W)
+        masks = masks.squeeze(-1).view(B, K, H, W)
+        
+        return {
+            'features': recon,
+            'masks': masks
+        }
         # It operates on tokens of shape (B, S, D) where S = H_low * W_low
         # and outputs (D_out + conf) * patch_size^2 per token
         
@@ -753,7 +773,7 @@ class POST3RDecoder(nn.Module):
     Outputs both pointmap and features from slots.
     
     Architecture:
-    - Feature head: Follows TTT3R's LinearPts3d style (MLP-based, pixel shuffle upsampling)
+    - Feature head: Follows SlotContrast's MLPDecoder (MLP + pos_emb + pose_emb)
     - Pointmap head: Follows TTT3R's DPTPts3dPose style (DPT-based multi-scale architecture)
     """
     
@@ -761,12 +781,12 @@ class POST3RDecoder(nn.Module):
         self,
         slot_dim: int,
         feature_dim: int = 1024,
+        n_patches: int = 1024,  # Number of patches from encoder (32x32 for 512x512)
         pose_dim: int = 7,
         pose_embed_dim: int = 64,
         pointmap_resolution: Tuple[int, int] = (288, 512),  # Default to match typical image size
         pointmap_hidden_dims: Tuple[int, ...] = (256, 256, 128),  # Legacy, kept for compatibility
-        feature_patch_size: int = 16,
-        feature_hidden_dim: int = 512,
+        feature_hidden_dims: Tuple[int, ...] = (512,),  # Hidden dims for feature MLP
         use_dpt_head: bool = True,  # Use DPT-based head by default
         dec_embed_dim: int = 768,  # For DPT
     ):
@@ -776,12 +796,12 @@ class POST3RDecoder(nn.Module):
         Args:
             slot_dim: Dimension of each slot
             feature_dim: Dimension of encoder features (for reconstruction)
+            n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
             pose_dim: Dimension of pose
             pose_embed_dim: Dimension of pose embedding
             pointmap_resolution: Output resolution for pointmap
             pointmap_hidden_dims: Hidden dimensions for pointmap CNN (legacy)
-            feature_patch_size: Patch size for feature head
-            feature_hidden_dim: Hidden dimension for feature MLP
+            feature_hidden_dims: Hidden dimensions for feature MLP (SlotContrast-style)
             use_dpt_head: Whether to use DPT-based pointmap head (default: True)
             dec_embed_dim: Decoder embedding dimension for DPT
         """
@@ -789,6 +809,7 @@ class POST3RDecoder(nn.Module):
         
         self.slot_dim = slot_dim
         self.feature_dim = feature_dim
+        self.n_patches = n_patches
         self.use_dpt_head = use_dpt_head
         
         # Store pointmap resolution for use in forward
@@ -822,14 +843,15 @@ class POST3RDecoder(nn.Module):
                 output_type='pointmap'
             )
         
-        # Feature head (MLP-based, following LinearPts3d)
+        # Feature head (SlotContrast-style MLP with pos_emb and pose_emb)
         self.feature_head = FeatureHead(
             slot_dim=slot_dim,
             pose_dim=pose_dim,
             pose_embed_dim=pose_embed_dim,
             output_dim=feature_dim,
-            patch_size=feature_patch_size,
-            hidden_dim=feature_hidden_dim,
+            n_patches=n_patches,
+            hidden_dims=feature_hidden_dims,
+            activation='relu',
         )
     
     def forward(
@@ -938,15 +960,16 @@ def test_decoder():
     print("\nTesting POST3RDecoder...")
     
     # Create POST3R decoder
+    n_patches = (resolution[0] // 16) * (resolution[1] // 16)
     post3r_decoder = POST3RDecoder(
         slot_dim=slot_dim,
         feature_dim=1024,
+        n_patches=n_patches,
         pose_dim=7,
         pose_embed_dim=64,
         pointmap_resolution=resolution,
         pointmap_hidden_dims=(256, 256, 128),
-        feature_patch_size=16,
-        feature_hidden_dim=512,
+        feature_hidden_dims=(512,),
     )
     
     # Forward pass

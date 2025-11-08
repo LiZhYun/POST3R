@@ -79,14 +79,12 @@ class FeatureHead(nn.Module):
     Feature decoder head following SlotContrast's MLPDecoder pattern.
     
     Decodes slots into feature maps that reconstruct the encoder features.
-    Uses MLP with positional embeddings (like SlotContrast) + pose embeddings (from POST3R).
+    Uses MLP with positional embeddings (like SlotContrast), without pose conditioning.
     """
     
     def __init__(
         self,
         slot_dim: int,
-        pose_dim: int = 7,
-        pose_embed_dim: int = 64,
         output_dim: int = 1024,
         n_patches: int = 1024,  # Number of patches from TTT3R encoder (32x32 for 512x512 image with patch_size=16)
         hidden_dims: Tuple[int, ...] = (512,),
@@ -97,8 +95,6 @@ class FeatureHead(nn.Module):
         
         Args:
             slot_dim: Dimension of each slot
-            pose_dim: Dimension of pose (7 for quaternion + translation)
-            pose_embed_dim: Dimension of pose embedding
             output_dim: Output feature dimension (should match encoder output, e.g., 1024)
             n_patches: Number of patches from encoder (e.g., 1024 for 32x32)
             hidden_dims: Hidden dimensions for MLP (tuple of ints)
@@ -110,18 +106,15 @@ class FeatureHead(nn.Module):
         self.output_dim = output_dim
         self.n_patches = n_patches
         
-        # Pose embedding (POST3R-specific)
-        self.pose_embedding = PoseEmbedding(pose_dim, pose_embed_dim)
-        
-        # Input dimension: slot + pose
-        input_dim = slot_dim + pose_embed_dim
+        # Input dimension: slot only (no pose)
+        input_dim = slot_dim
         
         # Positional embedding (SlotContrast-style)
         # Shape: (1, 1, n_patches, input_dim)
         self.pos_emb = nn.Parameter(torch.randn(1, 1, n_patches, input_dim) * input_dim**-0.5)
         
         # MLP decoder (SlotContrast-style)
-        # Input: slot + pose + pos_emb -> Output: features + alpha mask
+        # Input: slot + pos_emb -> Output: features + alpha mask
         from slotcontrast.modules.networks import MLP
         self.mlp = MLP(
             input_dim, 
@@ -133,7 +126,6 @@ class FeatureHead(nn.Module):
     def forward(
         self,
         slots: torch.Tensor,
-        pose: torch.Tensor,
         target_shape: Tuple[int, int],
     ) -> Dict[str, torch.Tensor]:
         """
@@ -141,7 +133,6 @@ class FeatureHead(nn.Module):
         
         Args:
             slots: Object slots (B, K, D_slot)
-            pose: Camera pose (B, 7)
             target_shape: Target spatial shape (H, W) - used for reshaping output
             
         Returns:
@@ -152,15 +143,8 @@ class FeatureHead(nn.Module):
         B, K, _ = slots.shape
         H, W = target_shape
         
-        # Embed pose (B, 7) -> (B, D_pose)
-        pose_embed = self.pose_embedding(pose)
-        
-        # Add pose to each slot: (B, K, D_slot) + (B, 1, D_pose) -> (B, K, D_slot + D_pose)
-        pose_expand = pose_embed.unsqueeze(1).expand(B, K, -1)
-        slots_with_pose = torch.cat([slots, pose_expand], dim=-1)
-        
         # Expand slots to all patches: (B, K, D) -> (B, K, N, D)
-        slots_expanded = slots_with_pose.unsqueeze(2).expand(B, K, self.n_patches, -1)
+        slots_expanded = slots.unsqueeze(2).expand(B, K, self.n_patches, -1)
         
         # Add positional embeddings (SlotContrast-style)
         # pos_emb: (1, 1, N, D) -> broadcast to (B, K, N, D)
@@ -473,13 +457,16 @@ class SlotToDPTAdapter(nn.Module):
     
     DPT expects multi-scale features from transformer decoder layers.
     We simulate this by:
-    1. Spatially broadcasting slots to create token grids
-    2. Using multi-layer transformations to create multi-scale representations
+    1. Adding pose embedding to slots
+    2. Spatially broadcasting slots to create token grids
+    3. Using multi-layer transformations to create multi-scale representations
     """
     
     def __init__(
         self,
         slot_dim: int,
+        pose_dim: int = 7,
+        pose_embed_dim: int = 64,
         target_dim: int = 768,  # Decoder embed dim for DPT
         num_scales: int = 4,
         spatial_size: Tuple[int, int] = (18, 32),  # (H, W) tokens, e.g., 288/16=18, 512/16=32
@@ -489,6 +476,8 @@ class SlotToDPTAdapter(nn.Module):
         
         Args:
             slot_dim: Dimension of input slots
+            pose_dim: Dimension of pose (7 for quaternion + translation)
+            pose_embed_dim: Dimension of pose embedding
             target_dim: Target dimension for DPT tokens (dec_embed_dim)
             num_scales: Number of scale levels (typically 4 for DPT)
             spatial_size: Number of tokens (H, W)
@@ -496,13 +485,17 @@ class SlotToDPTAdapter(nn.Module):
         super().__init__()
         
         self.slot_dim = slot_dim
+        self.pose_embed_dim = pose_embed_dim
         self.target_dim = target_dim
         self.num_scales = num_scales
         self.spatial_size = spatial_size
         self.num_tokens = spatial_size[0] * spatial_size[1]
         
-        # Projection from slots to target dimension
-        self.slot_proj = nn.Linear(slot_dim, target_dim)
+        # Pose embedding
+        self.pose_embedding = PoseEmbedding(pose_dim, pose_embed_dim)
+        
+        # Projection from slots + pose to target dimension
+        self.slot_proj = nn.Linear(slot_dim + pose_embed_dim, target_dim)
         
         # Learnable positional embeddings for spatial tokens
         self.pos_embed = nn.Parameter(torch.randn(1, self.num_tokens, target_dim) * 0.02)
@@ -518,12 +511,13 @@ class SlotToDPTAdapter(nn.Module):
             for _ in range(num_scales)
         ])
     
-    def forward(self, slots: torch.Tensor) -> List[torch.Tensor]:
+    def forward(self, slots: torch.Tensor, pose: torch.Tensor) -> List[torch.Tensor]:
         """
         Convert slots to multi-scale token representations.
         
         Args:
             slots: Input slots (B, K, D_slot)
+            pose: Camera pose (B, 7)
             
         Returns:
             List of token representations at different scales:
@@ -532,8 +526,15 @@ class SlotToDPTAdapter(nn.Module):
         """
         B, K, _ = slots.shape
         
-        # Project slots to target dimension
-        slots_proj = self.slot_proj(slots)  # (B, K, target_dim)
+        # Embed pose (B, 7) -> (B, D_pose)
+        pose_embed = self.pose_embedding(pose)  # (B, pose_embed_dim)
+        
+        # Add pose to each slot: (B, K, D_slot) + (B, 1, D_pose) -> (B, K, D_slot + D_pose)
+        pose_expand = pose_embed.unsqueeze(1).expand(B, K, -1)
+        slots_with_pose = torch.cat([slots, pose_expand], dim=-1)  # (B, K, D_slot + D_pose)
+        
+        # Project slots + pose to target dimension
+        slots_proj = self.slot_proj(slots_with_pose)  # (B, K, target_dim)
         
         # Average pool slots to get global representation
         global_feat = slots_proj.mean(dim=1, keepdim=True)  # (B, 1, target_dim)
@@ -590,16 +591,15 @@ class DPTPointmapHead(nn.Module):
         self.spatial_size = spatial_size
         self.output_channels = output_channels
         
-        # Slot to DPT adapter
+        # Slot to DPT adapter (now includes pose embedding)
         self.slot_adapter = SlotToDPTAdapter(
             slot_dim=slot_dim,
+            pose_dim=pose_dim,
+            pose_embed_dim=64,  # Internal pose embedding dimension
             target_dim=dec_embed_dim,
             num_scales=4,
             spatial_size=spatial_size,
         )
-        
-        # Pose embedding and modulation (following DPTPts3dPose)
-        self.pose_embedding = PoseEmbedding(pose_dim, dec_embed_dim)
         
         # # Import DPT components from TTT3R
         # # We'll create a simplified DPT adapter
@@ -675,8 +675,8 @@ class DPTPointmapHead(nn.Module):
                 # Get single slot
                 slot_k = slots[:, k:k+1, :]  # (B, 1, D_slot)
                 
-                # Convert to multi-scale tokens
-                multi_scale_tokens = self.slot_adapter(slot_k)  # List of 4 tensors
+                # Convert to multi-scale tokens (now with pose)
+                multi_scale_tokens = self.slot_adapter(slot_k, pose)  # List of 4 tensors
                 
                 # Apply DPT to get per-slot output
                 dpt_output = self.dpt(multi_scale_tokens, image_size=(H, W))  # (B, C, H, W)
@@ -843,11 +843,9 @@ class POST3RDecoder(nn.Module):
                 output_type='pointmap'
             )
         
-        # Feature head (SlotContrast-style MLP with pos_emb and pose_emb)
+        # Feature head (SlotContrast-style MLP with pos_emb, NO pose)
         self.feature_head = FeatureHead(
             slot_dim=slot_dim,
-            pose_dim=pose_dim,
-            pose_embed_dim=pose_embed_dim,
             output_dim=feature_dim,
             n_patches=n_patches,
             hidden_dims=feature_hidden_dims,
@@ -887,12 +885,12 @@ class POST3RDecoder(nn.Module):
             # CNN-based head
             pointmap_out = self.pointmap_head(slots, pose)
         
-        # Decode features
+        # Decode features (no pose)
         if feature_target_shape is None:
             # Use a default feature resolution (typically smaller than pointmap)
             feature_target_shape = (32, 32)  # Default for 512x512 input with patch_size=16
         
-        feature_out = self.feature_head(slots, pose, feature_target_shape)
+        feature_out = self.feature_head(slots, feature_target_shape)
         
         result = {
             'pointmap': pointmap_out['pointmap'],
